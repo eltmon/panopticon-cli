@@ -65,10 +65,12 @@ export function registerWorkCommands(program: Command): void {
 
   work
     .command('list')
-    .description('List Linear issues')
-    .option('--all', 'Include completed issues')
+    .description('List issues from configured trackers')
+    .option('--all', 'Include closed issues')
     .option('--mine', 'Show only my assigned issues')
     .option('--json', 'Output as JSON')
+    .option('--tracker <type>', 'Query specific tracker (linear/github/gitlab)')
+    .option('--all-trackers', 'Query all configured trackers')
     .action(listCommand);
 
   work

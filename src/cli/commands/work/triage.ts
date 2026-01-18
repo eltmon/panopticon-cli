@@ -1,54 +1,48 @@
+/**
+ * work triage - Triage issues from secondary tracker to primary tracker
+ *
+ * Uses the tracker abstraction to move issues between trackers.
+ */
+
 import chalk from 'chalk';
 import ora from 'ora';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { execSync } from 'child_process';
+import { loadConfig } from '../../../lib/config.js';
+import type { Issue, TrackerType } from '../../../lib/tracker/index.js';
+import { createTracker, TrackerConfig } from '../../../lib/tracker/index.js';
 
 interface TriageOptions {
   create?: boolean;
   dismiss?: string;
 }
 
-interface GitHubIssue {
-  number: number;
-  title: string;
-  body: string;
-  state: string;
-  html_url: string;
-  labels: { name: string }[];
-  created_at: string;
-  user: { login: string };
-}
-
 interface TriageState {
-  dismissed: number[];
-  created: { [githubNumber: number]: string }; // GitHub number -> Linear ID
+  dismissed: string[];  // Issue refs that were dismissed
+  created: { [sourceRef: string]: string };  // Source ref -> Primary ref
 }
 
-function getConfig(): { githubToken?: string; githubRepo?: string; linearApiKey?: string } {
-  const envFile = join(homedir(), '.panopticon.env');
-  const config: { githubToken?: string; githubRepo?: string; linearApiKey?: string } = {};
+/**
+ * Get tracker config by type from panopticon config
+ */
+function getTrackerConfig(trackerType: TrackerType): TrackerConfig | null {
+  const config = loadConfig();
+  const trackerConfig = config.trackers[trackerType];
 
-  if (existsSync(envFile)) {
-    const content = readFileSync(envFile, 'utf-8');
-
-    const ghMatch = content.match(/GITHUB_TOKEN=(.+)/);
-    if (ghMatch) config.githubToken = ghMatch[1].trim();
-
-    const repoMatch = content.match(/GITHUB_REPO=(.+)/);
-    if (repoMatch) config.githubRepo = repoMatch[1].trim();
-
-    const linearMatch = content.match(/LINEAR_API_KEY=(.+)/);
-    if (linearMatch) config.linearApiKey = linearMatch[1].trim();
+  if (!trackerConfig) {
+    return null;
   }
 
-  // Also check environment
-  config.githubToken = config.githubToken || process.env.GITHUB_TOKEN;
-  config.githubRepo = config.githubRepo || process.env.GITHUB_REPO;
-  config.linearApiKey = config.linearApiKey || process.env.LINEAR_API_KEY;
-
-  return config;
+  return {
+    type: trackerType,
+    apiKeyEnv: (trackerConfig as any).api_key_env,
+    team: (trackerConfig as any).team,
+    tokenEnv: (trackerConfig as any).token_env,
+    owner: (trackerConfig as any).owner,
+    repo: (trackerConfig as any).repo,
+    projectId: (trackerConfig as any).project_id,
+  };
 }
 
 function getTriageStatePath(): string {
@@ -58,80 +52,63 @@ function getTriageStatePath(): string {
 function loadTriageState(): TriageState {
   const path = getTriageStatePath();
   if (existsSync(path)) {
-    return JSON.parse(readFileSync(path, 'utf-8'));
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      return { dismissed: [], created: {} };
+    }
   }
   return { dismissed: [], created: {} };
 }
 
 function saveTriageState(state: TriageState): void {
+  const dir = join(homedir(), '.panopticon');
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
   const path = getTriageStatePath();
   writeFileSync(path, JSON.stringify(state, null, 2));
-}
-
-async function fetchGitHubIssues(token: string, repo: string): Promise<GitHubIssue[]> {
-  const response = await fetch(`https://api.github.com/repos/${repo}/issues?state=open&per_page=50`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github.v3+json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-  }
-
-  const issues = await response.json() as GitHubIssue[];
-  // Filter out PRs (they also appear in /issues endpoint)
-  return issues.filter(i => !('pull_request' in i));
-}
-
-async function createLinearIssue(
-  apiKey: string,
-  title: string,
-  description: string,
-  githubUrl: string
-): Promise<string> {
-  const { LinearClient } = await import('@linear/sdk');
-  const client = new LinearClient({ apiKey });
-
-  const me = await client.viewer;
-  const teams = await me.teams();
-  const team = teams.nodes[0];
-
-  if (!team) {
-    throw new Error('No Linear team found');
-  }
-
-  const fullDescription = `${description}\n\n---\n\n**From GitHub:** ${githubUrl}`;
-
-  const result = await client.createIssue({
-    teamId: team.id,
-    title,
-    description: fullDescription,
-  });
-
-  const issue = await result.issue;
-  return issue?.identifier || 'unknown';
 }
 
 export async function triageCommand(id?: string, options: TriageOptions = {}): Promise<void> {
   const spinner = ora('Loading triage queue...').start();
 
   try {
-    const config = getConfig();
+    const config = loadConfig();
+    const primaryType = config.trackers.primary;
+    const secondaryType = config.trackers.secondary;
 
-    // Check for required config
-    if (!config.githubToken || !config.githubRepo) {
-      spinner.info('GitHub integration not configured');
+    // Check for secondary tracker configuration
+    if (!secondaryType) {
+      spinner.info('No secondary tracker configured');
       console.log('');
       console.log(chalk.bold('Setup Instructions:'));
       console.log('');
-      console.log('Add to ~/.panopticon.env:');
-      console.log(chalk.dim('  GITHUB_TOKEN=ghp_xxxxx'));
-      console.log(chalk.dim('  GITHUB_REPO=owner/repo'));
-      console.log('');
-      console.log(chalk.dim('Get a token at: https://github.com/settings/tokens'));
-      console.log(chalk.dim('Required scopes: repo (for private repos) or public_repo'));
+      console.log('Add secondary tracker to ~/.panopticon/config.toml:');
+      console.log(chalk.dim(`
+[trackers]
+primary = "linear"
+secondary = "github"
+
+[trackers.github]
+type = "github"
+token_env = "GITHUB_TOKEN"
+owner = "your-org"
+repo = "your-repo"
+`));
+      return;
+    }
+
+    const primaryConfig = getTrackerConfig(primaryType);
+    const secondaryConfig = getTrackerConfig(secondaryType);
+
+    if (!primaryConfig) {
+      spinner.fail(`Primary tracker (${primaryType}) not configured`);
+      return;
+    }
+
+    if (!secondaryConfig) {
+      spinner.fail(`Secondary tracker (${secondaryType}) not configured`);
       return;
     }
 
@@ -139,68 +116,92 @@ export async function triageCommand(id?: string, options: TriageOptions = {}): P
 
     // If specific ID provided, handle create/dismiss
     if (id) {
-      const issueNumber = parseInt(id.replace('#', ''), 10);
+      // Normalize the ID (remove # prefix if present for GitHub)
+      const issueRef = id.startsWith('#') ? id : `#${id}`;
 
       if (options.dismiss) {
-        if (!triageState.dismissed.includes(issueNumber)) {
-          triageState.dismissed.push(issueNumber);
+        if (!triageState.dismissed.includes(issueRef)) {
+          triageState.dismissed.push(issueRef);
           saveTriageState(triageState);
         }
-        spinner.succeed(`Dismissed #${issueNumber}: ${options.dismiss}`);
+        spinner.succeed(`Dismissed ${issueRef}: ${options.dismiss}`);
         return;
       }
 
       if (options.create) {
-        if (!config.linearApiKey) {
-          spinner.fail('LINEAR_API_KEY not configured');
+        spinner.text = `Fetching ${secondaryType} issue ${issueRef}...`;
+
+        let secondaryTracker;
+        try {
+          secondaryTracker = createTracker(secondaryConfig);
+        } catch (error: any) {
+          spinner.fail(`Failed to connect to ${secondaryType}: ${error.message}`);
           return;
         }
 
-        // Fetch the specific issue
-        spinner.text = `Fetching GitHub issue #${issueNumber}...`;
-        const response = await fetch(
-          `https://api.github.com/repos/${config.githubRepo}/issues/${issueNumber}`,
-          {
-            headers: {
-              Authorization: `Bearer ${config.githubToken}`,
-              Accept: 'application/vnd.github.v3+json',
-            },
-          }
-        );
-
-        if (!response.ok) {
-          spinner.fail(`GitHub issue #${issueNumber} not found`);
+        let sourceIssue: Issue;
+        try {
+          sourceIssue = await secondaryTracker.getIssue(id);
+        } catch (error: any) {
+          spinner.fail(`Issue ${issueRef} not found in ${secondaryType}`);
           return;
         }
 
-        const ghIssue = await response.json() as GitHubIssue;
+        spinner.text = `Creating ${primaryType} issue...`;
 
-        spinner.text = 'Creating Linear issue...';
-        const linearId = await createLinearIssue(
-          config.linearApiKey,
-          ghIssue.title,
-          ghIssue.body || '',
-          ghIssue.html_url
-        );
+        let primaryTracker;
+        try {
+          primaryTracker = createTracker(primaryConfig);
+        } catch (error: any) {
+          spinner.fail(`Failed to connect to ${primaryType}: ${error.message}`);
+          return;
+        }
 
-        triageState.created[issueNumber] = linearId;
+        // Create issue in primary tracker with link to secondary
+        const newIssue = await primaryTracker.createIssue({
+          title: sourceIssue.title,
+          description: `${sourceIssue.description}\n\n---\n\n**From ${secondaryType}:** ${sourceIssue.url}`,
+          team: primaryConfig.team,
+        });
+
+        // Add comment to secondary issue linking to primary
+        try {
+          await secondaryTracker.addComment(
+            id,
+            `Internal tracking: ${newIssue.ref} (${primaryType})`
+          );
+        } catch {
+          // Non-fatal - just log warning
+          console.log(chalk.yellow('\nNote: Could not add link comment to source issue'));
+        }
+
+        triageState.created[sourceIssue.ref] = newIssue.ref;
         saveTriageState(triageState);
 
-        spinner.succeed(`Created ${linearId} from GitHub #${issueNumber}`);
+        spinner.succeed(`Created ${newIssue.ref} from ${sourceIssue.ref}`);
         console.log('');
-        console.log(`  GitHub: ${chalk.dim(ghIssue.html_url)}`);
-        console.log(`  Linear: ${chalk.cyan(linearId)}`);
+        console.log(`  ${secondaryType}: ${chalk.dim(sourceIssue.url)}`);
+        console.log(`  ${primaryType}: ${chalk.cyan(newIssue.ref)}`);
         return;
       }
     }
 
-    // List all GitHub issues needing triage
-    spinner.text = 'Fetching GitHub issues...';
-    const issues = await fetchGitHubIssues(config.githubToken, config.githubRepo);
+    // List all secondary tracker issues needing triage
+    spinner.text = `Fetching ${secondaryType} issues...`;
+
+    let secondaryTracker;
+    try {
+      secondaryTracker = createTracker(secondaryConfig);
+    } catch (error: any) {
+      spinner.fail(`Failed to connect to ${secondaryType}: ${error.message}`);
+      return;
+    }
+
+    const issues = await secondaryTracker.listIssues({ includeClosed: false });
 
     // Filter out dismissed and already created
     const pending = issues.filter(
-      (i) => !triageState.dismissed.includes(i.number) && !triageState.created[i.number]
+      (i) => !triageState.dismissed.includes(i.ref) && !triageState.created[i.ref]
     );
 
     spinner.stop();
@@ -211,18 +212,18 @@ export async function triageCommand(id?: string, options: TriageOptions = {}): P
       return;
     }
 
-    console.log(chalk.bold(`\nGitHub Issues Pending Triage (${pending.length})\n`));
+    console.log(chalk.bold(`\n${secondaryType.toUpperCase()} Issues Pending Triage (${pending.length})\n`));
 
     for (const issue of pending) {
-      const labels = issue.labels.map((l) => chalk.dim(`[${l.name}]`)).join(' ');
-      console.log(`  ${chalk.cyan(`#${issue.number}`)} ${issue.title} ${labels}`);
-      console.log(`    ${chalk.dim(issue.html_url)}`);
+      const labels = issue.labels.map((l) => chalk.dim(`[${l}]`)).join(' ');
+      console.log(`  ${chalk.cyan(issue.ref)} ${issue.title} ${labels}`);
+      console.log(`    ${chalk.dim(issue.url)}`);
     }
 
     console.log('');
     console.log(chalk.bold('Commands:'));
-    console.log(`  ${chalk.dim('Create Linear issue:')} pan work triage <number> --create`);
-    console.log(`  ${chalk.dim('Dismiss from queue:')}  pan work triage <number> --dismiss "reason"`);
+    console.log(`  ${chalk.dim(`Create ${primaryType} issue:`)} pan work triage <id> --create`);
+    console.log(`  ${chalk.dim('Dismiss from queue:')}  pan work triage <id> --dismiss "reason"`);
     console.log('');
 
   } catch (error: any) {

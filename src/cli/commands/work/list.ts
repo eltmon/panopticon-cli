@@ -1,35 +1,21 @@
+/**
+ * work list - List issues from configured trackers
+ *
+ * Uses the tracker abstraction to support Linear, GitHub, and GitLab.
+ */
+
 import chalk from 'chalk';
 import ora from 'ora';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { loadConfig } from '../../../lib/config.js';
+import type { Issue, IssueTracker, TrackerType } from '../../../lib/tracker/index.js';
+import { createTracker, TrackerConfig } from '../../../lib/tracker/index.js';
 
 interface ListOptions {
   all?: boolean;
   mine?: boolean;
   json?: boolean;
-}
-
-interface LinearIssue {
-  id: string;
-  identifier: string;
-  title: string;
-  state: string;
-  priority: number;
-  assignee?: { name: string };
-  url: string;
-}
-
-function getLinearApiKey(): string | null {
-  // Check ~/.panopticon.env
-  const envFile = join(homedir(), '.panopticon.env');
-  if (existsSync(envFile)) {
-    const content = readFileSync(envFile, 'utf-8');
-    const match = content.match(/LINEAR_API_KEY=(.+)/);
-    if (match) return match[1].trim();
-  }
-  // Check environment
-  return process.env.LINEAR_API_KEY || null;
+  tracker?: string;
+  allTrackers?: boolean;
 }
 
 const PRIORITY_LABELS: Record<number, string> = {
@@ -41,122 +27,173 @@ const PRIORITY_LABELS: Record<number, string> = {
 };
 
 const STATE_COLORS: Record<string, (s: string) => string> = {
-  'Backlog': chalk.dim,
-  'Todo': chalk.white,
-  'In Progress': chalk.yellow,
-  'In Review': chalk.magenta,
-  'Done': chalk.green,
-  'Canceled': chalk.strikethrough,
+  'open': chalk.white,
+  'in_progress': chalk.yellow,
+  'closed': chalk.green,
 };
 
+/**
+ * Get tracker config by type from panopticon config
+ */
+function getTrackerConfig(trackerType: TrackerType): TrackerConfig | null {
+  const config = loadConfig();
+  const trackerConfig = config.trackers[trackerType];
+
+  if (!trackerConfig) {
+    return null;
+  }
+
+  return {
+    type: trackerType,
+    apiKeyEnv: (trackerConfig as any).api_key_env,
+    team: (trackerConfig as any).team,
+    tokenEnv: (trackerConfig as any).token_env,
+    owner: (trackerConfig as any).owner,
+    repo: (trackerConfig as any).repo,
+    projectId: (trackerConfig as any).project_id,
+  };
+}
+
+/**
+ * Get all configured trackers
+ */
+function getConfiguredTrackers(): TrackerType[] {
+  const config = loadConfig();
+  const trackers: TrackerType[] = [];
+
+  if (config.trackers.linear) trackers.push('linear');
+  if (config.trackers.github) trackers.push('github');
+  if (config.trackers.gitlab) trackers.push('gitlab');
+
+  return trackers;
+}
+
+/**
+ * Display issues in a formatted way
+ */
+function displayIssues(issues: Issue[], trackerName: string): void {
+  if (issues.length === 0) {
+    console.log(chalk.dim(`  No issues found in ${trackerName}`));
+    return;
+  }
+
+  // Group by state
+  const byState: Record<string, Issue[]> = {};
+  for (const issue of issues) {
+    if (!byState[issue.state]) byState[issue.state] = [];
+    byState[issue.state].push(issue);
+  }
+
+  // Display order
+  const stateOrder = ['in_progress', 'open', 'closed'];
+
+  for (const state of stateOrder) {
+    const stateIssues = byState[state];
+    if (!stateIssues || stateIssues.length === 0) continue;
+
+    const colorFn = STATE_COLORS[state] || chalk.white;
+    const displayState = state.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+    console.log(colorFn(`  ── ${displayState} (${stateIssues.length}) ──`));
+
+    for (const issue of stateIssues) {
+      const priorityLabel = issue.priority ? PRIORITY_LABELS[issue.priority] || '' : '';
+      const assigneeStr = issue.assignee ? chalk.dim(` @${issue.assignee.split(' ')[0]}`) : '';
+      const priorityStr = issue.priority && issue.priority < 3 ? ` ${priorityLabel}` : '';
+
+      console.log(`    ${chalk.cyan(issue.ref)} ${issue.title}${assigneeStr}${priorityStr}`);
+    }
+    console.log('');
+  }
+}
+
 export async function listCommand(options: ListOptions): Promise<void> {
-  const spinner = ora('Fetching issues from Linear...').start();
+  const spinner = ora('Fetching issues...').start();
 
   try {
-    const apiKey = getLinearApiKey();
-    if (!apiKey) {
-      spinner.fail('LINEAR_API_KEY not found');
-      console.log('');
-      console.log(chalk.dim('Set it in ~/.panopticon.env:'));
-      console.log('  LINEAR_API_KEY=lin_api_xxxxx');
-      process.exit(1);
-    }
+    const config = loadConfig();
+    const trackersToQuery: TrackerType[] = [];
 
-    // Dynamic import to avoid loading if not needed
-    const { LinearClient } = await import('@linear/sdk');
-    const client = new LinearClient({ apiKey });
-
-    // Get current user
-    const me = await client.viewer;
-
-    // Get teams
-    const teams = await me.teams();
-    const team = teams.nodes[0];
-
-    if (!team) {
-      spinner.fail('No Linear team found');
-      process.exit(1);
-    }
-
-    spinner.text = `Fetching issues from ${team.name}...`;
-
-    // Fetch issues
-    let issues;
-    if (options.mine) {
-      const assignedIssues = await me.assignedIssues({
-        first: 50,
-        filter: options.all ? {} : { state: { type: { neq: 'completed' } } },
-      });
-      issues = assignedIssues.nodes;
+    // Determine which trackers to query
+    if (options.tracker) {
+      // Specific tracker requested
+      const trackerType = options.tracker as TrackerType;
+      if (!['linear', 'github', 'gitlab'].includes(trackerType)) {
+        spinner.fail(`Unknown tracker: ${options.tracker}`);
+        console.log(chalk.dim('Valid trackers: linear, github, gitlab'));
+        process.exit(1);
+      }
+      trackersToQuery.push(trackerType);
+    } else if (options.allTrackers) {
+      // All configured trackers
+      trackersToQuery.push(...getConfiguredTrackers());
     } else {
-      const teamIssues = await team.issues({
-        first: 50,
-        filter: options.all ? {} : { state: { type: { neq: 'completed' } } },
-      });
-      issues = teamIssues.nodes;
+      // Primary tracker only (default)
+      trackersToQuery.push(config.trackers.primary);
+    }
+
+    if (trackersToQuery.length === 0) {
+      spinner.fail('No trackers configured');
+      console.log(chalk.dim('Configure trackers in ~/.panopticon/config.toml'));
+      process.exit(1);
+    }
+
+    // Fetch issues from all requested trackers
+    const allIssues: { tracker: TrackerType; issues: Issue[] }[] = [];
+
+    for (const trackerType of trackersToQuery) {
+      spinner.text = `Fetching from ${trackerType}...`;
+
+      const trackerConfig = getTrackerConfig(trackerType);
+      if (!trackerConfig) {
+        console.log(chalk.yellow(`\nWarning: ${trackerType} not configured, skipping`));
+        continue;
+      }
+
+      try {
+        const tracker = createTracker(trackerConfig);
+        const issues = await tracker.listIssues({
+          includeClosed: options.all,
+          assignee: options.mine ? 'me' : undefined,
+        });
+        allIssues.push({ tracker: trackerType, issues });
+      } catch (error: any) {
+        console.log(chalk.yellow(`\nWarning: Failed to fetch from ${trackerType}: ${error.message}`));
+      }
     }
 
     spinner.stop();
 
+    // JSON output
     if (options.json) {
-      const formatted = await Promise.all(issues.map(async (issue) => {
-        const state = await issue.state;
-        const assignee = await issue.assignee;
-        return {
-          id: issue.id,
-          identifier: issue.identifier,
-          title: issue.title,
-          state: state?.name,
-          priority: issue.priority,
-          assignee: assignee?.name,
-          url: issue.url,
-        };
-      }));
-      console.log(JSON.stringify(formatted, null, 2));
+      const output = allIssues.flatMap(({ tracker, issues }) =>
+        issues.map(issue => ({ ...issue, source: tracker }))
+      );
+      console.log(JSON.stringify(output, null, 2));
       return;
     }
 
-    if (issues.length === 0) {
-      console.log(chalk.dim('No issues found.'));
+    // Display results
+    const totalIssues = allIssues.reduce((sum, { issues }) => sum + issues.length, 0);
+
+    if (totalIssues === 0) {
+      console.log(chalk.dim('\nNo issues found.'));
       return;
     }
 
-    console.log(chalk.bold(`\n${team.name} Issues\n`));
-
-    // Group by state
-    const byState: Record<string, typeof issues> = {};
-    for (const issue of issues) {
-      const state = await issue.state;
-      const stateName = state?.name || 'Unknown';
-      if (!byState[stateName]) byState[stateName] = [];
-      byState[stateName].push(issue);
+    for (const { tracker, issues } of allIssues) {
+      console.log(chalk.bold(`\n${tracker.toUpperCase()} (${issues.length} issues)\n`));
+      displayIssues(issues, tracker);
     }
 
-    // Display order
-    const stateOrder = ['In Progress', 'In Review', 'Todo', 'Backlog', 'Done', 'Canceled'];
-
-    for (const stateName of stateOrder) {
-      const stateIssues = byState[stateName];
-      if (!stateIssues || stateIssues.length === 0) continue;
-
-      const colorFn = STATE_COLORS[stateName] || chalk.white;
-      console.log(colorFn(`── ${stateName} (${stateIssues.length}) ──`));
-      console.log('');
-
-      for (const issue of stateIssues) {
-        const assignee = await issue.assignee;
-        const priorityLabel = PRIORITY_LABELS[issue.priority] || '';
-        const assigneeStr = assignee ? chalk.dim(` @${assignee.name.split(' ')[0]}`) : '';
-
-        console.log(`  ${chalk.cyan(issue.identifier)} ${issue.title}${assigneeStr}`);
-        if (issue.priority > 0 && issue.priority < 3) {
-          console.log(`    ${priorityLabel}`);
-        }
-      }
-      console.log('');
+    // Footer
+    const trackerNames = trackersToQuery.join(', ');
+    console.log(chalk.dim(`Showing ${totalIssues} issues from ${trackerNames}.`));
+    if (!options.all) {
+      console.log(chalk.dim('Use --all to include closed issues.'));
     }
-
-    console.log(chalk.dim(`Showing ${issues.length} issues. Use --all to include completed.`));
+    if (!options.allTrackers && trackersToQuery.length === 1) {
+      console.log(chalk.dim('Use --all-trackers to query all configured trackers.'));
+    }
 
   } catch (error: any) {
     spinner.fail(error.message);
