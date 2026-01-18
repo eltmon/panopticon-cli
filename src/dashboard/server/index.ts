@@ -27,7 +27,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Get Linear issues with pagination
+// Get Linear issues using raw GraphQL for efficiency (single query with all data)
 app.get('/api/issues', async (_req, res) => {
   try {
     const apiKey = getLinearApiKey();
@@ -35,65 +35,93 @@ app.get('/api/issues', async (_req, res) => {
       return res.status(500).json({ error: 'LINEAR_API_KEY not configured' });
     }
 
-    const { LinearClient } = await import('@linear/sdk');
-    const client = new LinearClient({ apiKey });
-
-    // Get current cycle issues
-    const me = await client.viewer;
-    const teams = await me.teams();
-    const team = teams.nodes[0];
-
-    if (!team) {
-      return res.json([]);
-    }
-
-    // Paginate through all issues
+    // Use raw GraphQL to fetch all data in one query per page (no lazy loading)
     const allIssues: any[] = [];
     let hasMore = true;
     let cursor: string | undefined;
 
     while (hasMore) {
-      const response = await team.issues({
-        first: 100,
-        after: cursor,
-        orderBy: 'updatedAt' as any,
+      const query = `
+        query GetIssues($after: String) {
+          issues(first: 100, after: $after, orderBy: updatedAt) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              identifier
+              title
+              description
+              priority
+              url
+              createdAt
+              updatedAt
+              state {
+                name
+              }
+              assignee {
+                name
+                email
+              }
+              labels {
+                nodes {
+                  name
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const response = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey,
+        },
+        body: JSON.stringify({ query, variables: { after: cursor } }),
       });
 
-      allIssues.push(...response.nodes);
-      hasMore = response.pageInfo.hasNextPage;
-      cursor = response.pageInfo.endCursor;
+      const json = await response.json();
 
-      // Safety limit to prevent infinite loops
+      if (json.errors) {
+        console.error('GraphQL errors:', json.errors);
+        throw new Error(json.errors[0]?.message || 'GraphQL error');
+      }
+
+      const issues = json.data?.issues;
+      if (!issues) break;
+
+      allIssues.push(...issues.nodes);
+      hasMore = issues.pageInfo.hasNextPage;
+      cursor = issues.pageInfo.endCursor;
+
+      // Safety limit
       if (allIssues.length > 1000) break;
     }
 
-    // Resolve states and format issues (state is a promise in Linear SDK)
-    const formatted = await Promise.all(
-      allIssues.map(async (issue) => {
-        const state = await issue.state;
-        const assignee = await issue.assignee;
-        const labels = await issue.labels();
+    console.log(`Fetched ${allIssues.length} issues`);
 
-        return {
-          id: issue.id,
-          identifier: issue.identifier,
-          title: issue.title,
-          description: issue.description,
-          status: state?.name || 'Backlog',
-          priority: issue.priority,
-          assignee: assignee ? { name: assignee.name, email: assignee.email } : undefined,
-          labels: labels?.nodes?.map((l: any) => l.name) || [],
-          url: issue.url,
-          createdAt: issue.createdAt,
-          updatedAt: issue.updatedAt,
-        };
-      })
-    );
+    // Format issues (data is already resolved, no extra API calls)
+    const formatted = allIssues.map((issue: any) => ({
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      description: issue.description,
+      status: issue.state?.name || 'Backlog',
+      priority: issue.priority,
+      assignee: issue.assignee ? { name: issue.assignee.name, email: issue.assignee.email } : undefined,
+      labels: issue.labels?.nodes?.map((l: any) => l.name) || [],
+      url: issue.url,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+    }));
 
     res.json(formatted);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching issues:', error);
-    res.status(500).json({ error: 'Failed to fetch issues' });
+    res.status(500).json({ error: 'Failed to fetch issues: ' + error.message });
   }
 });
 
