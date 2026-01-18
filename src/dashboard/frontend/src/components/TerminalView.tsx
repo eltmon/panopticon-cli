@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState, useRef, useEffect } from 'react';
 import { Terminal, Send, RefreshCw } from 'lucide-react';
 
@@ -25,7 +25,6 @@ async function sendMessage(agentId: string, message: string): Promise<void> {
 export function TerminalView({ agentId }: TerminalViewProps) {
   const [message, setMessage] = useState('');
   const outputRef = useRef<HTMLPreElement>(null);
-  const queryClient = useQueryClient();
 
   const { data: output, isLoading, refetch } = useQuery({
     queryKey: ['agent-output', agentId],

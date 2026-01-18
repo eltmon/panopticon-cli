@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Agent } from '../types';
-import { Play, Square, Clock, Cpu, AlertTriangle } from 'lucide-react';
+import { Square, Clock, Cpu, AlertTriangle } from 'lucide-react';
 
 interface AgentListProps {
   selectedAgent: string | null;
