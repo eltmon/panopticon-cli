@@ -4,19 +4,21 @@ import chalk from 'chalk';
 import { initCommand } from './commands/init.js';
 import { syncCommand } from './commands/sync.js';
 import { restoreCommand } from './commands/restore.js';
+import { backupListCommand, backupCleanCommand } from './commands/backup.js';
 import { skillsCommand } from './commands/skills.js';
 import { registerWorkCommands, statusCommand } from './commands/work/index.js';
 import { registerWorkspaceCommands } from './commands/workspace.js';
 import { registerInstallCommand } from './commands/install.js';
 import { projectAddCommand, projectListCommand, projectRemoveCommand } from './commands/project.js';
 import { doctorCommand } from './commands/doctor.js';
+import { updateCommand } from './commands/update.js';
 
 const program = new Command();
 
 program
   .name('pan')
   .description('Multi-agent orchestration for AI coding assistants')
-  .version('0.1.0');
+  .version('0.1.3');
 
 program
   .command('init')
@@ -35,6 +37,21 @@ program
   .command('restore [timestamp]')
   .description('Restore from backup')
   .action(restoreCommand);
+
+// Backup management
+const backup = program.command('backup').description('Manage backups');
+
+backup
+  .command('list')
+  .description('List all backups')
+  .option('--json', 'Output as JSON')
+  .action(backupListCommand);
+
+backup
+  .command('clean')
+  .description('Remove old backups')
+  .option('--keep <count>', 'Number of backups to keep', '10')
+  .action(backupCleanCommand);
 
 program
   .command('skills')
@@ -145,6 +162,14 @@ program
   .command('doctor')
   .description('Check system health and dependencies')
   .action(doctorCommand);
+
+// Update command
+program
+  .command('update')
+  .description('Update Panopticon to latest version')
+  .option('--check', 'Only check for updates, don\'t install')
+  .option('--force', 'Force update even if on latest')
+  .action(updateCommand);
 
 // Parse and execute
 program.parse();

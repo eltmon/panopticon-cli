@@ -1,0 +1,210 @@
+/**
+ * GitHub Issues Tracker Adapter
+ *
+ * Implements IssueTracker interface for GitHub Issues.
+ */
+
+import { Octokit } from '@octokit/rest';
+import type {
+  Issue,
+  IssueFilters,
+  IssueState,
+  IssueTracker,
+  IssueUpdate,
+  NewIssue,
+  Comment,
+  TrackerType,
+} from './interface.js';
+import { IssueNotFoundError, TrackerAuthError } from './interface.js';
+
+export class GitHubTracker implements IssueTracker {
+  readonly name: TrackerType = 'github';
+  private octokit: Octokit;
+  private owner: string;
+  private repo: string;
+
+  constructor(token: string, owner: string, repo: string) {
+    if (!token) {
+      throw new TrackerAuthError('github', 'Token is required');
+    }
+    if (!owner || !repo) {
+      throw new Error('GitHub owner and repo are required');
+    }
+
+    this.octokit = new Octokit({ auth: token });
+    this.owner = owner;
+    this.repo = repo;
+  }
+
+  async listIssues(filters?: IssueFilters): Promise<Issue[]> {
+    const state = this.mapStateToGitHub(filters?.state);
+
+    const response = await this.octokit.issues.listForRepo({
+      owner: this.owner,
+      repo: this.repo,
+      state: filters?.includeClosed ? 'all' : state,
+      labels: filters?.labels?.join(',') || undefined,
+      assignee: filters?.assignee || undefined,
+      per_page: filters?.limit ?? 50,
+    });
+
+    // Filter out pull requests (GitHub API returns both)
+    const issues = response.data.filter((item) => !item.pull_request);
+
+    return issues.map((issue) => this.normalizeIssue(issue));
+  }
+
+  async getIssue(id: string): Promise<Issue> {
+    try {
+      // Parse the issue number from refs like "#42" or just "42"
+      const issueNumber = parseInt(id.replace(/^#/, ''), 10);
+
+      if (isNaN(issueNumber)) {
+        throw new IssueNotFoundError(id, 'github');
+      }
+
+      const { data: issue } = await this.octokit.issues.get({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: issueNumber,
+      });
+
+      return this.normalizeIssue(issue);
+    } catch (error: any) {
+      if (error?.status === 404) {
+        throw new IssueNotFoundError(id, 'github');
+      }
+      throw error;
+    }
+  }
+
+  async updateIssue(id: string, update: IssueUpdate): Promise<Issue> {
+    const issueNumber = parseInt(id.replace(/^#/, ''), 10);
+
+    const updatePayload: Record<string, unknown> = {};
+
+    if (update.title !== undefined) {
+      updatePayload.title = update.title;
+    }
+    if (update.description !== undefined) {
+      updatePayload.body = update.description;
+    }
+    if (update.state !== undefined) {
+      updatePayload.state = update.state === 'closed' ? 'closed' : 'open';
+    }
+    if (update.labels !== undefined) {
+      updatePayload.labels = update.labels;
+    }
+    if (update.assignee !== undefined) {
+      updatePayload.assignees = update.assignee ? [update.assignee] : [];
+    }
+
+    await this.octokit.issues.update({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: issueNumber,
+      ...updatePayload,
+    });
+
+    return this.getIssue(id);
+  }
+
+  async createIssue(newIssue: NewIssue): Promise<Issue> {
+    const { data: issue } = await this.octokit.issues.create({
+      owner: this.owner,
+      repo: this.repo,
+      title: newIssue.title,
+      body: newIssue.description,
+      labels: newIssue.labels,
+      assignees: newIssue.assignee ? [newIssue.assignee] : undefined,
+    });
+
+    return this.normalizeIssue(issue);
+  }
+
+  async getComments(issueId: string): Promise<Comment[]> {
+    const issueNumber = parseInt(issueId.replace(/^#/, ''), 10);
+
+    const { data: comments } = await this.octokit.issues.listComments({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: issueNumber,
+    });
+
+    return comments.map((c) => ({
+      id: String(c.id),
+      issueId,
+      body: c.body ?? '',
+      author: c.user?.login ?? 'Unknown',
+      createdAt: c.created_at,
+      updatedAt: c.updated_at,
+    }));
+  }
+
+  async addComment(issueId: string, body: string): Promise<Comment> {
+    const issueNumber = parseInt(issueId.replace(/^#/, ''), 10);
+
+    const { data: comment } = await this.octokit.issues.createComment({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: issueNumber,
+      body,
+    });
+
+    return {
+      id: String(comment.id),
+      issueId,
+      body: comment.body ?? '',
+      author: comment.user?.login ?? 'Unknown',
+      createdAt: comment.created_at,
+      updatedAt: comment.updated_at,
+    };
+  }
+
+  async transitionIssue(id: string, state: IssueState): Promise<void> {
+    await this.updateIssue(id, { state });
+  }
+
+  async linkPR(issueId: string, prUrl: string): Promise<void> {
+    // GitHub auto-links PRs that mention issues
+    // Add a comment with the PR link
+    await this.addComment(
+      issueId,
+      `Linked Pull Request: ${prUrl}`
+    );
+  }
+
+  private normalizeIssue(ghIssue: any): Issue {
+    return {
+      id: String(ghIssue.id),
+      ref: `#${ghIssue.number}`,
+      title: ghIssue.title,
+      description: ghIssue.body ?? '',
+      state: this.mapStateFromGitHub(ghIssue.state),
+      labels: ghIssue.labels.map((l: any) =>
+        typeof l === 'string' ? l : l.name
+      ),
+      assignee: ghIssue.assignee?.login,
+      url: ghIssue.html_url,
+      tracker: 'github',
+      priority: undefined, // GitHub doesn't have priority
+      dueDate: undefined, // GitHub doesn't have due dates on issues
+      createdAt: ghIssue.created_at,
+      updatedAt: ghIssue.updated_at,
+    };
+  }
+
+  private mapStateFromGitHub(ghState: string): IssueState {
+    // GitHub only has open and closed states
+    // No way to distinguish "in_progress" without custom labels
+    return ghState === 'closed' ? 'closed' : 'open';
+  }
+
+  private mapStateToGitHub(
+    state?: IssueState
+  ): 'open' | 'closed' | 'all' {
+    if (!state) return 'open';
+    if (state === 'closed') return 'closed';
+    return 'open'; // Both 'open' and 'in_progress' map to 'open'
+  }
+}
