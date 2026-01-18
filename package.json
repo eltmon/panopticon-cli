@@ -1,0 +1,63 @@
+{
+  "name": "panopticon-cli",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration dashboard for Claude Code",
+  "keywords": [
+    "claude-code",
+    "ai-agents",
+    "orchestration",
+    "dashboard",
+    "linear",
+    "devtools"
+  ],
+  "author": "Edward Becker <ed@mindyournow.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eltmon/panopticon-cli.git"
+  },
+  "homepage": "https://github.com/eltmon/panopticon-cli#readme",
+  "bugs": {
+    "url": "https://github.com/eltmon/panopticon-cli/issues"
+  },
+  "type": "module",
+  "bin": {
+    "pan": "./dist/cli/index.js",
+    "panopticon": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/cli/index.ts",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "conf": "^12.0.0",
+    "execa": "^8.0.1",
+    "inquirer": "^9.2.12",
+    "ora": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^20.10.0",
+    "eslint": "^8.55.0",
+    "tsup": "^8.0.1",
+    "tsx": "^4.6.2",
+    "typescript": "^5.3.2",
+    "vitest": "^1.0.4"
+  }
+}
