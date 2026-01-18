@@ -34,10 +34,10 @@ jobs:
           node dist/cli/index.js --version
           node dist/cli/index.js --help
 
-      # Trusted Publishing - no NPM_TOKEN needed!
-      # Uses OIDC to authenticate with npm
       - name: Publish to npm
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
