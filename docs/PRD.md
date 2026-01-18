@@ -3408,7 +3408,7 @@ permissions:
     "linear",
     "devtools"
   ],
-  "author": "Edward Becker <ed@mindyournow.com>",
+  "author": "Edward Becker <edward.becker@mindyournow.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -3446,7 +3446,7 @@ permissions:
 npm login
 # Username: eltmon
 # Password: ********
-# Email: ed@mindyournow.com
+# Email: edward.becker@mindyournow.com
 
 # 2. Build the project
 npm run build
@@ -3586,6 +3586,121 @@ Browser-based login doesn't work well in WSL2. Options:
   ```bash
   echo "//registry.npmjs.org/:_authToken=YOUR_TOKEN" >> ~/.npmrc
   ```
+
+---
+
+## Part 15: Per-Feature Cost Tracking
+
+### The Problem
+
+When running autonomous agents on Linear issues, there's no visibility into **how much each feature costs** in tokens and dollars. This makes it impossible to:
+
+- Budget for features accurately
+- Compare agent efficiency across runtimes
+- Identify cost outliers (runaway agents, stuck loops)
+- Calculate ROI for AI-assisted development
+
+### Data Sources
+
+All major AI coding tools log token usage to local files:
+
+| Runtime | Token Data Location | Format |
+|---------|---------------------|--------|
+| **Claude Code** | `~/.claude/projects/<path>/<session>.jsonl` | Per-message `usage` object |
+| **Codex CLI** | `~/.codex/sessions/<session>.jsonl` | `token_count` events |
+| **Gemini CLI** | `/stats` command + Billing API | API response |
+
+**Claude Code JSONL Structure:**
+
+```json
+{
+  "sessionId": "037ae6b1-826d-4b2f-ae80-9b467abb7e43",
+  "timestamp": "2026-01-17T10:30:00.000Z",
+  "message": {
+    "model": "claude-opus-4-5-20251101",
+    "usage": {
+      "input_tokens": 1500,
+      "output_tokens": 500,
+      "cache_creation_input_tokens": 30000,
+      "cache_read_input_tokens": 10000
+    }
+  }
+}
+```
+
+### Solution: Session-to-Issue Linking
+
+When Panopticon spawns an agent for an issue, it records the session ID in the agent state. When the agent completes, Panopticon:
+
+1. **Parses the JSONL file** for that session ID
+2. **Sums all token usage** across messages
+3. **Calculates cost** using model-specific pricing
+4. **Stores cost data** in `~/.panopticon/costs/<issue-id>.json`
+5. **Updates the bead** with cost metadata
+
+### Cost Calculation
+
+Pricing per 1M tokens (January 2026):
+
+| Model | Input | Output | Cache Create | Cache Read |
+|-------|-------|--------|--------------|------------|
+| Claude Opus 4.5 | $15.00 | $75.00 | $18.75 | $1.50 |
+| Claude Sonnet 4 | $3.00 | $15.00 | $3.75 | $0.30 |
+| Claude Haiku 4 | $0.80 | $4.00 | $1.00 | $0.08 |
+| GPT-5 | $5.00 | $15.00 | - | - |
+| Gemini 3 Pro | $2.00 | $6.00 | - | - |
+
+### User Interface
+
+**CLI:**
+
+```bash
+# Cost for a specific issue
+pan cost MIN-123
+# Output:
+# Cost Report: MIN-123
+# Total Cost: $2.47
+# Tokens: 1.2M input, 45K output, 2.1M cache
+# Sessions: 3
+# Models: opus (40%), sonnet (60%)
+
+# Daily aggregate costs
+pan cost --daily
+# Output:
+# 2026-01-17: $12.50 (5 issues)
+# 2026-01-16: $8.30 (3 issues)
+
+# JSON output for automation
+pan cost MIN-123 --json
+```
+
+**Dashboard:**
+
+- Kanban cards show cost badge: `$2.47`
+- Issue detail view shows full breakdown
+- Daily/weekly cost charts
+
+**Beads Integration:**
+
+```bash
+bd show MIN-123
+# ...
+# Cost: $2.47 (3 sessions, 1.2M tokens)
+```
+
+### Implementation Notes
+
+1. **No external dependencies**: We parse JSONL ourselves (not relying on ccusage at runtime)
+2. **ccusage-compatible**: Same JSONL format, can use ccusage for verification
+3. **Multi-runtime**: Each runtime has its own parser module
+4. **Aggregation**: Costs aggregate across multiple sessions per issue
+5. **Real-time (future)**: Could show running cost during agent work
+
+### Related Tools
+
+- **[ccusage](https://github.com/ryoppippi/ccusage)**: CLI tool for analyzing Claude Code/Codex usage (reference implementation)
+- **[Claude Code Usage Monitor](https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor)**: Real-time monitoring with predictions
+- **[Codextime](https://codexti.me/)**: Codex cost tracking with team analytics
 
 ---
 
@@ -3884,4 +3999,5 @@ All open questions have been answered. Panopticon PRD is ready for implementatio
 *Document created: 2026-01-16 (Original PRD)*
 *Merged: 2026-01-17 (Combined with Expanded Thoughts)*
 *Part 14 added: 2026-01-17 (Installation, CLI & Portability)*
+*Part 15 added: 2026-01-17 (Per-Feature Cost Tracking)*
 *Ready for: Weekend Implementation*

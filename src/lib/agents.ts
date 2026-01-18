@@ -1,0 +1,276 @@
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+import { AGENTS_DIR } from './paths.js';
+import { createSession, killSession, sendKeys, sessionExists, getAgentSessions } from './tmux.js';
+import { initHook, checkHook, generateGUPPPrompt } from './hooks.js';
+import { startWork, completeWork, getAgentCV } from './cv.js';
+
+export interface AgentState {
+  id: string;
+  issueId: string;
+  workspace: string;
+  runtime: string;
+  model: string;
+  status: 'starting' | 'running' | 'stopped' | 'error';
+  startedAt: string;
+  lastActivity?: string;
+}
+
+export function getAgentDir(agentId: string): string {
+  return join(AGENTS_DIR, agentId);
+}
+
+export function getAgentState(agentId: string): AgentState | null {
+  const stateFile = join(getAgentDir(agentId), 'state.json');
+  if (!existsSync(stateFile)) return null;
+
+  const content = readFileSync(stateFile, 'utf8');
+  return JSON.parse(content);
+}
+
+export function saveAgentState(state: AgentState): void {
+  const dir = getAgentDir(state.id);
+  mkdirSync(dir, { recursive: true });
+
+  writeFileSync(
+    join(dir, 'state.json'),
+    JSON.stringify(state, null, 2)
+  );
+}
+
+export interface SpawnOptions {
+  issueId: string;
+  workspace: string;
+  runtime?: string;
+  model?: string;
+  prompt?: string;
+}
+
+export function spawnAgent(options: SpawnOptions): AgentState {
+  const agentId = `agent-${options.issueId.toLowerCase()}`;
+
+  // Check if already running
+  if (sessionExists(agentId)) {
+    throw new Error(`Agent ${agentId} already running. Use 'pan work tell' to message it.`);
+  }
+
+  // Initialize hook for this agent (GUPP support)
+  initHook(agentId);
+
+  // Create state
+  const state: AgentState = {
+    id: agentId,
+    issueId: options.issueId,
+    workspace: options.workspace,
+    runtime: options.runtime || 'claude',
+    model: options.model || 'sonnet',
+    status: 'starting',
+    startedAt: new Date().toISOString(),
+  };
+
+  saveAgentState(state);
+
+  // Build prompt with GUPP work if available
+  let prompt = options.prompt || '';
+
+  // GUPP: Check for pending work on hook
+  const { hasWork, items } = checkHook(agentId);
+  if (hasWork) {
+    const guppPrompt = generateGUPPPrompt(agentId);
+    if (guppPrompt) {
+      prompt = guppPrompt + '\n\n---\n\n' + prompt;
+    }
+  }
+
+  // Create tmux session with claude command
+  const claudeCmd = prompt
+    ? `claude --model ${state.model} "${prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`
+    : `claude --model ${state.model}`;
+
+  createSession(agentId, options.workspace, claudeCmd);
+
+  // Update status
+  state.status = 'running';
+  saveAgentState(state);
+
+  // Track work in CV
+  startWork(agentId, options.issueId);
+
+  return state;
+}
+
+export function listRunningAgents(): (AgentState & { tmuxActive: boolean })[] {
+  const tmuxSessions = getAgentSessions();
+  const tmuxNames = new Set(tmuxSessions.map(s => s.name));
+
+  const agents: (AgentState & { tmuxActive: boolean })[] = [];
+
+  // Read all agent states
+  if (!existsSync(AGENTS_DIR)) return agents;
+
+  const dirs = readdirSync(AGENTS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory());
+
+  for (const dir of dirs) {
+    const state = getAgentState(dir.name);
+    if (state) {
+      agents.push({
+        ...state,
+        tmuxActive: tmuxNames.has(state.id),
+      });
+    }
+  }
+
+  return agents;
+}
+
+export function stopAgent(agentId: string): void {
+  // Normalize agent ID
+  const normalizedId = agentId.startsWith('agent-') ? agentId : `agent-${agentId.toLowerCase()}`;
+
+  if (sessionExists(normalizedId)) {
+    killSession(normalizedId);
+  }
+
+  const state = getAgentState(normalizedId);
+  if (state) {
+    state.status = 'stopped';
+    saveAgentState(state);
+  }
+}
+
+export function messageAgent(agentId: string, message: string): void {
+  // Normalize agent ID
+  const normalizedId = agentId.startsWith('agent-') ? agentId : `agent-${agentId.toLowerCase()}`;
+
+  if (!sessionExists(normalizedId)) {
+    throw new Error(`Agent ${normalizedId} not running`);
+  }
+
+  sendKeys(normalizedId, message);
+
+  // Also save to mail queue
+  const mailDir = join(getAgentDir(normalizedId), 'mail');
+  mkdirSync(mailDir, { recursive: true });
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  writeFileSync(
+    join(mailDir, `${timestamp}.md`),
+    `# Message\n\n${message}\n`
+  );
+}
+
+/**
+ * Detect crashed agents (state shows running but tmux session is gone)
+ */
+export function detectCrashedAgents(): AgentState[] {
+  const agents = listRunningAgents();
+  return agents.filter(
+    (agent) => agent.status === 'running' && !agent.tmuxActive
+  );
+}
+
+/**
+ * Recover a crashed agent by restarting it with context
+ */
+export function recoverAgent(agentId: string): AgentState | null {
+  const normalizedId = agentId.startsWith('agent-') ? agentId : `agent-${agentId.toLowerCase()}`;
+  const state = getAgentState(normalizedId);
+
+  if (!state) {
+    return null;
+  }
+
+  // Check if already running
+  if (sessionExists(normalizedId)) {
+    return state;
+  }
+
+  // Update crash count in health file
+  const healthFile = join(getAgentDir(normalizedId), 'health.json');
+  let health = { consecutiveFailures: 0, killCount: 0, recoveryCount: 0 };
+  if (existsSync(healthFile)) {
+    try {
+      health = { ...health, ...JSON.parse(readFileSync(healthFile, 'utf-8')) };
+    } catch {}
+  }
+  health.recoveryCount = (health.recoveryCount || 0) + 1;
+  writeFileSync(healthFile, JSON.stringify(health, null, 2));
+
+  // Build recovery prompt
+  const recoveryPrompt = generateRecoveryPrompt(state);
+
+  // Restart the agent with recovery context
+  const claudeCmd = `claude --model ${state.model} "${recoveryPrompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+  createSession(normalizedId, state.workspace, claudeCmd);
+
+  // Update state
+  state.status = 'running';
+  state.lastActivity = new Date().toISOString();
+  saveAgentState(state);
+
+  return state;
+}
+
+/**
+ * Generate a recovery prompt for a crashed agent
+ */
+function generateRecoveryPrompt(state: AgentState): string {
+  const lines: string[] = [
+    '# Agent Recovery',
+    '',
+    '⚠️ This agent session was recovered after a crash.',
+    '',
+    '## Previous Context',
+    `- Issue: ${state.issueId}`,
+    `- Workspace: ${state.workspace}`,
+    `- Started: ${state.startedAt}`,
+    '',
+    '## Recovery Steps',
+    '1. Check beads for context: `bd show ' + state.issueId + '`',
+    '2. Review recent git commits: `git log --oneline -10`',
+    '3. Check hook for pending work: `pan work hook check`',
+    '4. Resume from last known state',
+    '',
+    '## GUPP Reminder',
+    '> "If there is work on your Hook, YOU MUST RUN IT."',
+    '',
+  ];
+
+  // Add GUPP work if available
+  const { hasWork } = checkHook(state.id);
+  if (hasWork) {
+    const guppPrompt = generateGUPPPrompt(state.id);
+    if (guppPrompt) {
+      lines.push('---');
+      lines.push('');
+      lines.push(guppPrompt);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Auto-recover all crashed agents
+ */
+export function autoRecoverAgents(): { recovered: string[]; failed: string[] } {
+  const crashed = detectCrashedAgents();
+  const recovered: string[] = [];
+  const failed: string[] = [];
+
+  for (const agent of crashed) {
+    try {
+      const result = recoverAgent(agent.id);
+      if (result) {
+        recovered.push(agent.id);
+      } else {
+        failed.push(agent.id);
+      }
+    } catch (error) {
+      failed.push(agent.id);
+    }
+  }
+
+  return { recovered, failed };
+}

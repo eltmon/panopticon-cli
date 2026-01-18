@@ -1,0 +1,86 @@
+import chalk from 'chalk';
+import ora from 'ora';
+import inquirer from 'inquirer';
+import { listBackups, restoreBackup } from '../../lib/backup.js';
+import { loadConfig } from '../../lib/config.js';
+import { SYNC_TARGETS, Runtime } from '../../lib/paths.js';
+
+export async function restoreCommand(timestamp?: string): Promise<void> {
+  const backups = listBackups();
+
+  if (backups.length === 0) {
+    console.log(chalk.yellow('No backups found.'));
+    return;
+  }
+
+  // If no timestamp provided, let user choose
+  if (!timestamp) {
+    console.log(chalk.bold('Available backups:\n'));
+
+    for (const backup of backups.slice(0, 10)) {
+      console.log(`  ${chalk.cyan(backup.timestamp)} - ${backup.targets.join(', ')}`);
+    }
+
+    if (backups.length > 10) {
+      console.log(chalk.dim(`  ... and ${backups.length - 10} more`));
+    }
+
+    console.log('');
+
+    const { selected } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'selected',
+        message: 'Select backup to restore:',
+        choices: backups.slice(0, 10).map((b) => ({
+          name: `${b.timestamp} (${b.targets.join(', ')})`,
+          value: b.timestamp,
+        })),
+      },
+    ]);
+
+    timestamp = selected;
+  }
+
+  // Confirm restore
+  const { confirm } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'confirm',
+      message: `Restore backup ${timestamp}? This will overwrite current files.`,
+      default: false,
+    },
+  ]);
+
+  if (!confirm) {
+    console.log(chalk.dim('Restore cancelled.'));
+    return;
+  }
+
+  const spinner = ora('Restoring backup...').start();
+
+  try {
+    const config = loadConfig();
+    const targets = config.sync.targets as Runtime[];
+
+    // Build target dirs map
+    const targetDirs: Record<string, string> = {};
+
+    for (const runtime of targets) {
+      targetDirs[`${runtime}-skills`] = SYNC_TARGETS[runtime].skills;
+      targetDirs[`${runtime}-commands`] = SYNC_TARGETS[runtime].commands;
+      // Also try simple names for backwards compatibility
+      targetDirs['skills'] = SYNC_TARGETS[runtime].skills;
+      targetDirs['commands'] = SYNC_TARGETS[runtime].commands;
+    }
+
+    restoreBackup(timestamp!, targetDirs);
+
+    spinner.succeed(`Restored backup: ${timestamp}`);
+
+  } catch (error: any) {
+    spinner.fail('Failed to restore');
+    console.error(chalk.red(error.message));
+    process.exit(1);
+  }
+}
