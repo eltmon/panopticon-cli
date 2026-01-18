@@ -6,6 +6,7 @@ import { TerminalView } from './components/TerminalView';
 import { HealthDashboard } from './components/HealthDashboard';
 import { SkillsList } from './components/SkillsList';
 import { WorkspacePanel } from './components/WorkspacePanel';
+import { IssueDetailPanel } from './components/IssueDetailPanel';
 import { Eye, LayoutGrid, Users, Activity, BookOpen } from 'lucide-react';
 import { Agent, Issue } from './types';
 
@@ -86,17 +87,25 @@ export default function App() {
       <main className="flex-1 flex overflow-hidden">
         {activeTab === 'kanban' && (
           <>
-            <div className={`flex-1 overflow-auto p-6 ${selectedIssueAgent ? '' : 'w-full'}`}>
+            <div className={`flex-1 overflow-auto p-6 ${selectedIssue ? '' : 'w-full'}`}>
               <KanbanBoard
                 selectedIssue={selectedIssue}
                 onSelectIssue={setSelectedIssue}
               />
             </div>
-            {selectedIssueAgent && (
+            {selectedIssue && selectedIssueAgent && (
               <div className="w-[700px] shrink-0 h-full">
                 <WorkspacePanel
                   agent={selectedIssueAgent}
                   issueUrl={selectedIssueData?.url}
+                  onClose={() => setSelectedIssue(null)}
+                />
+              </div>
+            )}
+            {selectedIssue && !selectedIssueAgent && selectedIssueData && (
+              <div className="w-[400px] shrink-0 h-full">
+                <IssueDetailPanel
+                  issue={selectedIssueData}
                   onClose={() => setSelectedIssue(null)}
                 />
               </div>
