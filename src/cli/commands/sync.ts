@@ -1,0 +1,109 @@
+import chalk from 'chalk';
+import ora from 'ora';
+import { loadConfig } from '../../lib/config.js';
+import { createBackup } from '../../lib/backup.js';
+import { planSync, executeSync } from '../../lib/sync.js';
+import { SYNC_TARGETS, Runtime } from '../../lib/paths.js';
+
+interface SyncOptions {
+  dryRun?: boolean;
+  force?: boolean;
+  backupOnly?: boolean;
+}
+
+export async function syncCommand(options: SyncOptions): Promise<void> {
+  const config = loadConfig();
+  const targets = config.sync.targets as Runtime[];
+
+  if (targets.length === 0) {
+    console.log(chalk.yellow('No sync targets configured.'));
+    console.log(chalk.dim('Edit ~/.panopticon/config.toml to add targets.'));
+    return;
+  }
+
+  // Dry run mode
+  if (options.dryRun) {
+    console.log(chalk.bold('Sync Plan (dry run):\n'));
+
+    for (const runtime of targets) {
+      const plan = planSync(runtime);
+
+      console.log(chalk.cyan(`${runtime}:`));
+
+      if (plan.skills.length === 0 && plan.commands.length === 0) {
+        console.log(chalk.dim('  (nothing to sync)'));
+        continue;
+      }
+
+      for (const item of plan.skills) {
+        const icon = item.status === 'conflict' ? chalk.yellow('!') : chalk.green('+');
+        const status = item.status === 'conflict' ? chalk.yellow('[conflict]') : '';
+        console.log(`  ${icon} skill/${item.name} ${status}`);
+      }
+
+      for (const item of plan.commands) {
+        const icon = item.status === 'conflict' ? chalk.yellow('!') : chalk.green('+');
+        const status = item.status === 'conflict' ? chalk.yellow('[conflict]') : '';
+        console.log(`  ${icon} command/${item.name} ${status}`);
+      }
+
+      console.log('');
+    }
+
+    console.log(chalk.dim('Run without --dry-run to apply changes.'));
+    return;
+  }
+
+  // Create backup if enabled
+  if (config.sync.backup_before_sync) {
+    const spinner = ora('Creating backup...').start();
+
+    const backupDirs = targets.flatMap((r) => [
+      SYNC_TARGETS[r].skills,
+      SYNC_TARGETS[r].commands,
+    ]);
+
+    const backup = createBackup(backupDirs);
+
+    if (backup.targets.length > 0) {
+      spinner.succeed(`Backup created: ${backup.timestamp}`);
+    } else {
+      spinner.info('No existing content to backup');
+    }
+
+    if (options.backupOnly) {
+      return;
+    }
+  }
+
+  // Execute sync
+  const spinner = ora('Syncing...').start();
+
+  let totalCreated = 0;
+  let totalConflicts = 0;
+
+  for (const runtime of targets) {
+    spinner.text = `Syncing to ${runtime}...`;
+
+    const result = executeSync(runtime, { force: options.force });
+
+    totalCreated += result.created.length;
+    totalConflicts += result.conflicts.length;
+
+    if (result.conflicts.length > 0 && !options.force) {
+      console.log('');
+      console.log(chalk.yellow(`Conflicts in ${runtime}:`));
+      for (const name of result.conflicts) {
+        console.log(chalk.dim(`  - ${name} (use --force to overwrite)`));
+      }
+    }
+  }
+
+  if (totalConflicts > 0 && !options.force) {
+    spinner.warn(`Synced ${totalCreated} items, ${totalConflicts} conflicts`);
+    console.log('');
+    console.log(chalk.dim('Use --force to overwrite conflicting items.'));
+  } else {
+    spinner.succeed(`Synced ${totalCreated} items to ${targets.join(', ')}`);
+  }
+}

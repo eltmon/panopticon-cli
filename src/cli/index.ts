@@ -1,0 +1,150 @@
+#!/usr/bin/env node
+import { Command } from 'commander';
+import chalk from 'chalk';
+import { initCommand } from './commands/init.js';
+import { syncCommand } from './commands/sync.js';
+import { restoreCommand } from './commands/restore.js';
+import { skillsCommand } from './commands/skills.js';
+import { registerWorkCommands, statusCommand } from './commands/work/index.js';
+import { registerWorkspaceCommands } from './commands/workspace.js';
+import { registerInstallCommand } from './commands/install.js';
+import { projectAddCommand, projectListCommand, projectRemoveCommand } from './commands/project.js';
+import { doctorCommand } from './commands/doctor.js';
+
+const program = new Command();
+
+program
+  .name('pan')
+  .description('Multi-agent orchestration for AI coding assistants')
+  .version('0.1.0');
+
+program
+  .command('init')
+  .description('Initialize Panopticon (~/.panopticon/)')
+  .action(initCommand);
+
+program
+  .command('sync')
+  .description('Sync skills/commands to AI tools')
+  .option('--dry-run', 'Show what would be synced')
+  .option('--force', 'Overwrite without prompts')
+  .option('--backup-only', 'Only create backup')
+  .action(syncCommand);
+
+program
+  .command('restore [timestamp]')
+  .description('Restore from backup')
+  .action(restoreCommand);
+
+program
+  .command('skills')
+  .description('List and manage skills')
+  .option('--json', 'Output as JSON')
+  .action(skillsCommand);
+
+// Register work commands (pan work issue, pan work status, etc.)
+registerWorkCommands(program);
+
+// Register workspace commands (pan workspace create, pan workspace list, etc.)
+registerWorkspaceCommands(program);
+
+// Register install command
+registerInstallCommand(program);
+
+// Shorthand: pan status = pan work status
+program
+  .command('status')
+  .description('Show running agents (shorthand for work status)')
+  .option('--json', 'Output as JSON')
+  .action(statusCommand);
+
+// Dashboard commands
+program
+  .command('up')
+  .description('Start dashboard')
+  .option('--detach', 'Run in background')
+  .action(async (options) => {
+    const { spawn, execSync } = await import('child_process');
+    const { join, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+
+    // Find dashboard directory relative to CLI
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const dashboardDir = join(__dirname, '..', 'dashboard');
+
+    console.log(chalk.bold('Starting Panopticon dashboard...\n'));
+
+    if (options.detach) {
+      // Run in background
+      const child = spawn('npm', ['run', 'dev'], {
+        cwd: dashboardDir,
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+      console.log(chalk.green('Dashboard started in background'));
+      console.log(`Frontend: ${chalk.cyan('http://localhost:3001')}`);
+      console.log(`API:      ${chalk.cyan('http://localhost:3002')}`);
+    } else {
+      // Run in foreground
+      console.log(`Frontend: ${chalk.cyan('http://localhost:3001')}`);
+      console.log(`API:      ${chalk.cyan('http://localhost:3002')}`);
+      console.log(chalk.dim('\nPress Ctrl+C to stop\n'));
+
+      const child = spawn('npm', ['run', 'dev'], {
+        cwd: dashboardDir,
+        stdio: 'inherit',
+      });
+
+      child.on('error', (err) => {
+        console.error(chalk.red('Failed to start dashboard:'), err.message);
+        process.exit(1);
+      });
+    }
+  });
+
+program
+  .command('down')
+  .description('Stop dashboard')
+  .action(async () => {
+    const { execSync } = await import('child_process');
+    try {
+      // Kill processes on dashboard ports
+      execSync('lsof -ti:3001 | xargs kill -9 2>/dev/null || true', { stdio: 'pipe' });
+      execSync('lsof -ti:3002 | xargs kill -9 2>/dev/null || true', { stdio: 'pipe' });
+      console.log(chalk.green('Dashboard stopped'));
+    } catch {
+      console.log(chalk.dim('No dashboard processes found'));
+    }
+  });
+
+// Project management commands
+const project = program.command('project').description('Project management');
+
+project
+  .command('add <path>')
+  .description('Register a project with Panopticon')
+  .option('--name <name>', 'Project name')
+  .option('--type <type>', 'Project type (standalone/monorepo)', 'standalone')
+  .option('--linear-team <team>', 'Linear team prefix')
+  .action(projectAddCommand);
+
+project
+  .command('list')
+  .description('List all managed projects')
+  .option('--json', 'Output as JSON')
+  .action(projectListCommand);
+
+project
+  .command('remove <nameOrPath>')
+  .description('Remove a project from Panopticon')
+  .action(projectRemoveCommand);
+
+// Doctor command
+program
+  .command('doctor')
+  .description('Check system health and dependencies')
+  .action(doctorCommand);
+
+// Parse and execute
+program.parse();
