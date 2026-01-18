@@ -111,6 +111,22 @@ pan work hook push agent-min-123 "Continue with tests"
 pan work hook mail agent-min-123 "Review feedback received"
 ```
 
+### Workspace Management
+
+```bash
+# Create a workspace (git worktree) without starting an agent
+pan workspace create MIN-123
+
+# List all workspaces
+pan workspace list
+
+# Destroy a workspace
+pan workspace destroy MIN-123
+
+# Force destroy (even with uncommitted changes)
+pan workspace destroy MIN-123 --force
+```
+
 ### Project Management
 
 ```bash
