@@ -5,14 +5,21 @@ import { AgentList } from './components/AgentList';
 import { TerminalView } from './components/TerminalView';
 import { HealthDashboard } from './components/HealthDashboard';
 import { SkillsList } from './components/SkillsList';
-import { Eye, LayoutGrid, Users, Activity, BookOpen, X } from 'lucide-react';
-import { Agent } from './types';
+import { WorkspacePanel } from './components/WorkspacePanel';
+import { Eye, LayoutGrid, Users, Activity, BookOpen } from 'lucide-react';
+import { Agent, Issue } from './types';
 
 type Tab = 'kanban' | 'agents' | 'skills' | 'health';
 
 async function fetchAgents(): Promise<Agent[]> {
   const res = await fetch('/api/agents');
   if (!res.ok) throw new Error('Failed to fetch agents');
+  return res.json();
+}
+
+async function fetchIssues(): Promise<Issue[]> {
+  const res = await fetch('/api/issues');
+  if (!res.ok) throw new Error('Failed to fetch issues');
   return res.json();
 }
 
@@ -28,14 +35,25 @@ export default function App() {
     refetchInterval: 5000,
   });
 
+  // Fetch issues to get issue URLs
+  const { data: issues = [] } = useQuery({
+    queryKey: ['issues'],
+    queryFn: fetchIssues,
+  });
+
   // Find agent for selected issue
   const selectedIssueAgent = selectedIssue
     ? agents.find((a) => a.issueId?.toLowerCase() === selectedIssue.toLowerCase())
     : null;
 
+  // Find issue URL for selected issue
+  const selectedIssueData = selectedIssue
+    ? issues.find((i) => i.identifier.toLowerCase() === selectedIssue.toLowerCase())
+    : null;
+
   return (
-    <div className="min-h-screen bg-gray-900">
-      <header className="bg-gray-800 border-b border-gray-700 px-6 py-4">
+    <div className="min-h-screen bg-gray-900 flex flex-col">
+      <header className="bg-gray-800 border-b border-gray-700 px-6 py-4 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Eye className="w-6 h-6 text-blue-400" />
@@ -65,51 +83,47 @@ export default function App() {
         </div>
       </header>
 
-      <main className="p-6">
+      <main className="flex-1 flex overflow-hidden">
         {activeTab === 'kanban' && (
-          <div className="flex gap-6">
-            <div className={selectedIssueAgent ? 'flex-1' : 'w-full'}>
+          <>
+            <div className={`flex-1 overflow-auto p-6 ${selectedIssueAgent ? '' : 'w-full'}`}>
               <KanbanBoard
                 selectedIssue={selectedIssue}
                 onSelectIssue={setSelectedIssue}
               />
             </div>
             {selectedIssueAgent && (
-              <div className="w-[500px] flex-shrink-0">
-                <div className="bg-gray-800 rounded-lg overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-white">
-                        {selectedIssue}
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {selectedIssueAgent.model}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => setSelectedIssue(null)}
-                      className="text-gray-400 hover:text-white p-1"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <TerminalView agentId={selectedIssueAgent.id} />
-                </div>
+              <div className="w-[700px] shrink-0 h-full">
+                <WorkspacePanel
+                  agent={selectedIssueAgent}
+                  issueUrl={selectedIssueData?.url}
+                  onClose={() => setSelectedIssue(null)}
+                />
               </div>
             )}
-          </div>
+          </>
         )}
         {activeTab === 'agents' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <AgentList
-              selectedAgent={selectedAgent}
-              onSelectAgent={setSelectedAgent}
-            />
-            {selectedAgent && <TerminalView agentId={selectedAgent} />}
+          <div className="p-6 w-full">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <AgentList
+                selectedAgent={selectedAgent}
+                onSelectAgent={setSelectedAgent}
+              />
+              {selectedAgent && <TerminalView agentId={selectedAgent} />}
+            </div>
           </div>
         )}
-        {activeTab === 'skills' && <SkillsList />}
-        {activeTab === 'health' && <HealthDashboard />}
+        {activeTab === 'skills' && (
+          <div className="p-6 w-full overflow-auto">
+            <SkillsList />
+          </div>
+        )}
+        {activeTab === 'health' && (
+          <div className="p-6 w-full overflow-auto">
+            <HealthDashboard />
+          </div>
+        )}
       </main>
     </div>
   );

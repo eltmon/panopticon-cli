@@ -125,6 +125,36 @@ app.get('/api/issues', async (_req, res) => {
   }
 });
 
+// Get git status for a workspace path
+function getGitStatus(workspacePath: string): { branch: string; uncommittedFiles: number; latestCommit: string } | null {
+  try {
+    if (!existsSync(workspacePath)) return null;
+
+    const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    const uncommitted = execSync('git status --porcelain 2>/dev/null | wc -l', {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    const latestCommit = execSync('git log -1 --pretty=format:"%s" 2>/dev/null', {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    return {
+      branch,
+      uncommittedFiles: parseInt(uncommitted) || 0,
+      latestCommit: latestCommit.slice(0, 60) + (latestCommit.length > 60 ? '...' : ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Get running agents from tmux sessions
 app.get('/api/agents', (_req, res) => {
   try {
@@ -142,13 +172,24 @@ app.get('/api/agents', (_req, res) => {
 
         // Check agent state from ~/.panopticon/agents/
         const stateFile = join(homedir(), '.panopticon', 'agents', name, 'state.json');
-        let state = { runtime: 'claude', model: 'sonnet', consecutiveFailures: 0, killCount: 0 };
+        const healthFile = join(homedir(), '.panopticon', 'agents', name, 'health.json');
+        let state: any = { runtime: 'claude', model: 'sonnet', workspace: process.cwd() };
+        let health: any = { consecutiveFailures: 0, killCount: 0 };
 
         if (existsSync(stateFile)) {
           try {
             state = { ...state, ...JSON.parse(readFileSync(stateFile, 'utf-8')) };
           } catch {}
         }
+
+        if (existsSync(healthFile)) {
+          try {
+            health = { ...health, ...JSON.parse(readFileSync(healthFile, 'utf-8')) };
+          } catch {}
+        }
+
+        // Get git status for workspace
+        const gitStatus = state.workspace ? getGitStatus(state.workspace) : null;
 
         return {
           id: name,
@@ -157,8 +198,10 @@ app.get('/api/agents', (_req, res) => {
           model: state.model || 'sonnet',
           status: 'healthy' as const,
           startedAt,
-          consecutiveFailures: state.consecutiveFailures || 0,
-          killCount: state.killCount || 0,
+          consecutiveFailures: health.consecutiveFailures || 0,
+          killCount: health.killCount || 0,
+          workspace: state.workspace || null,
+          git: gitStatus,
         };
       });
 

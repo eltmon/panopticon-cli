@@ -15,6 +15,12 @@ export interface Issue {
   updatedAt: string;
 }
 
+export interface GitStatus {
+  branch: string;
+  uncommittedFiles: number;
+  latestCommit: string;
+}
+
 export interface Agent {
   id: string;
   issueId?: string;
@@ -26,6 +32,8 @@ export interface Agent {
   lastActivity?: string;
   consecutiveFailures: number;
   killCount: number;
+  workspace?: string;
+  git?: GitStatus;
 }
 
 export interface AgentHealth {
