@@ -50,12 +50,33 @@ export type IssueStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'do
 export const STATUS_ORDER: IssueStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done'];
 
 export const STATUS_LABELS: Record<string, IssueStatus> = {
+  // Backlog states
   'Backlog': 'backlog',
+  'Triage': 'backlog',
+  'Unknown': 'backlog',
+
+  // Todo states
   'Todo': 'todo',
   'To Do': 'todo',
+  'Ready': 'todo',
+  'Unstarted': 'todo',
+
+  // In Progress states
   'In Progress': 'in_progress',
   'Started': 'in_progress',
+  'Active': 'in_progress',
+
+  // In Review states
   'In Review': 'in_review',
+  'Review': 'in_review',
+  'QA': 'in_review',
+  'Testing': 'in_review',
+
+  // Done states
   'Done': 'done',
   'Completed': 'done',
+  'Closed': 'done',
+  'Canceled': 'done',
+  'Cancelled': 'done',
+  'Duplicate': 'done',
 };

@@ -27,7 +27,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Get Linear issues
+// Get Linear issues with pagination
 app.get('/api/issues', async (_req, res) => {
   try {
     const apiKey = getLinearApiKey();
@@ -47,23 +47,48 @@ app.get('/api/issues', async (_req, res) => {
       return res.json([]);
     }
 
-    const issues = await team.issues({
-      first: 100,
-      orderBy: 'updatedAt' as any,
-    });
+    // Paginate through all issues
+    const allIssues: any[] = [];
+    let hasMore = true;
+    let cursor: string | undefined;
 
-    const formatted = issues.nodes.map((issue) => ({
-      id: issue.id,
-      identifier: issue.identifier,
-      title: issue.title,
-      description: issue.description,
-      status: issue.state?.name || 'Unknown',
-      priority: issue.priority,
-      labels: [],
-      url: issue.url,
-      createdAt: issue.createdAt,
-      updatedAt: issue.updatedAt,
-    }));
+    while (hasMore) {
+      const response = await team.issues({
+        first: 100,
+        after: cursor,
+        orderBy: 'updatedAt' as any,
+      });
+
+      allIssues.push(...response.nodes);
+      hasMore = response.pageInfo.hasNextPage;
+      cursor = response.pageInfo.endCursor;
+
+      // Safety limit to prevent infinite loops
+      if (allIssues.length > 1000) break;
+    }
+
+    // Resolve states and format issues (state is a promise in Linear SDK)
+    const formatted = await Promise.all(
+      allIssues.map(async (issue) => {
+        const state = await issue.state;
+        const assignee = await issue.assignee;
+        const labels = await issue.labels();
+
+        return {
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          description: issue.description,
+          status: state?.name || 'Backlog',
+          priority: issue.priority,
+          assignee: assignee ? { name: assignee.name, email: assignee.email } : undefined,
+          labels: labels?.nodes?.map((l: any) => l.name) || [],
+          url: issue.url,
+          createdAt: issue.createdAt,
+          updatedAt: issue.updatedAt,
+        };
+      })
+    );
 
     res.json(formatted);
   } catch (error) {
