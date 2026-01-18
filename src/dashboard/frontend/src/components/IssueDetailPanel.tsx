@@ -8,6 +8,7 @@ import {
   Calendar,
   Copy,
   Check,
+  FolderPlus,
 } from 'lucide-react';
 import { Issue } from '../types';
 
@@ -19,6 +20,7 @@ interface IssueDetailPanelProps {
 
 export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPanelProps) {
   const [copied, setCopied] = useState(false);
+  const [copiedWorkspace, setCopiedWorkspace] = useState(false);
 
   const handleCopyIdentifier = () => {
     navigator.clipboard.writeText(issue.identifier);
@@ -32,6 +34,15 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
     navigator.clipboard.writeText(command);
     alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your terminal to start an agent.`);
     onStartAgent?.();
+  };
+
+  const handleCreateWorkspace = () => {
+    // Copy the workspace create command
+    const command = `pan workspace create ${issue.identifier}`;
+    navigator.clipboard.writeText(command);
+    setCopiedWorkspace(true);
+    setTimeout(() => setCopiedWorkspace(false), 2000);
+    alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your project directory to create a workspace without starting an agent.`);
   };
 
   const priorityLabels: Record<number, { label: string; color: string }> = {
@@ -139,24 +150,43 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
             <div>
               <h4 className="text-sm font-medium text-yellow-400">No Agent Running</h4>
               <p className="text-xs text-gray-400 mt-1">
-                Start an agent to work on this issue autonomously.
+                Start an agent or create a workspace to begin work.
               </p>
             </div>
           </div>
         </div>
 
-        {/* Start Agent Button */}
-        <button
-          onClick={handleStartAgent}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
-        >
-          <Play className="w-5 h-5" />
-          <span className="font-medium">Start Agent</span>
-        </button>
+        {/* Action Buttons */}
+        <div className="space-y-3">
+          {/* Start Agent Button */}
+          <button
+            onClick={handleStartAgent}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
+          >
+            <Play className="w-5 h-5" />
+            <span className="font-medium">Start Agent</span>
+          </button>
 
-        <p className="text-xs text-gray-500 text-center mt-2">
-          Copies command to clipboard: <code className="bg-gray-900 px-1 rounded">pan work issue {issue.identifier}</code>
-        </p>
+          {/* Create Workspace Button */}
+          <button
+            onClick={handleCreateWorkspace}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600"
+          >
+            <FolderPlus className="w-5 h-5" />
+            <span className="font-medium">
+              {copiedWorkspace ? 'Copied!' : 'Create Workspace Only'}
+            </span>
+          </button>
+        </div>
+
+        <div className="text-xs text-gray-500 mt-3 space-y-1">
+          <p>
+            <strong>Start Agent:</strong> Creates workspace + starts autonomous agent
+          </p>
+          <p>
+            <strong>Create Workspace:</strong> Creates git worktree for manual work
+          </p>
+        </div>
       </div>
     </div>
   );
