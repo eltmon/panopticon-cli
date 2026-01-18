@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { BookOpen, FolderCode, Check, AlertCircle, RefreshCw } from 'lucide-react';
+import { BookOpen, Folder, Check, AlertCircle, RefreshCw } from 'lucide-react';
 import { Skill } from '../types';
 
 export function SkillsList() {
@@ -62,7 +62,7 @@ export function SkillsList() {
 
       {skills.length === 0 ? (
         <div className="bg-gray-800 rounded-lg p-8 text-center text-gray-400">
-          <FolderCode className="w-12 h-12 mx-auto mb-3 opacity-50" />
+          <Folder className="w-12 h-12 mx-auto mb-3 opacity-50" />
           <p>No skills found</p>
           <p className="text-sm mt-2">
             Add skills to ~/.panopticon/skills/ or ~/.claude/skills/

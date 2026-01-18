@@ -49,7 +49,7 @@ app.get('/api/issues', async (_req, res) => {
 
     const issues = await team.issues({
       first: 100,
-      orderBy: { updatedAt: 'desc' } as any,
+      orderBy: 'updatedAt' as any,
     });
 
     const formatted = issues.nodes.map((issue) => ({
@@ -352,6 +352,6 @@ app.get('/api/skills', (_req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Panopticon API server running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Panopticon API server running on http://0.0.0.0:${PORT}`);
 });
