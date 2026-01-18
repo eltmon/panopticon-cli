@@ -1,0 +1,198 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import {
+  LinkManager,
+  parseIssueRef,
+  formatIssueRef,
+} from '../../../src/lib/tracker/linking.js';
+
+describe('parseIssueRef', () => {
+  it('should parse GitHub-style refs', () => {
+    expect(parseIssueRef('#42')).toEqual({ tracker: 'github', ref: '#42' });
+    expect(parseIssueRef('#123')).toEqual({ tracker: 'github', ref: '#123' });
+  });
+
+  it('should parse explicit GitHub prefix', () => {
+    expect(parseIssueRef('github#42')).toEqual({ tracker: 'github', ref: '#42' });
+  });
+
+  it('should parse explicit GitLab prefix', () => {
+    expect(parseIssueRef('gitlab#15')).toEqual({ tracker: 'gitlab', ref: '#15' });
+  });
+
+  it('should parse Linear-style refs', () => {
+    expect(parseIssueRef('MIN-630')).toEqual({ tracker: 'linear', ref: 'MIN-630' });
+    expect(parseIssueRef('PAN-42')).toEqual({ tracker: 'linear', ref: 'PAN-42' });
+  });
+
+  it('should handle lowercase Linear refs', () => {
+    expect(parseIssueRef('min-630')).toEqual({ tracker: 'linear', ref: 'MIN-630' });
+  });
+
+  it('should return null for invalid refs', () => {
+    expect(parseIssueRef('invalid')).toBeNull();
+    expect(parseIssueRef('123')).toBeNull();
+    expect(parseIssueRef('')).toBeNull();
+  });
+});
+
+describe('formatIssueRef', () => {
+  it('should format GitHub refs with prefix', () => {
+    expect(formatIssueRef('#42', 'github')).toBe('github#42');
+    expect(formatIssueRef('42', 'github')).toBe('github#42');
+  });
+
+  it('should format GitLab refs with prefix', () => {
+    expect(formatIssueRef('#15', 'gitlab')).toBe('gitlab#15');
+  });
+
+  it('should return Linear refs unchanged', () => {
+    expect(formatIssueRef('MIN-630', 'linear')).toBe('MIN-630');
+  });
+});
+
+describe('LinkManager', () => {
+  let tempDir: string;
+  let manager: LinkManager;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'pan-link-test-'));
+    manager = new LinkManager(join(tempDir, 'links.json'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true });
+  });
+
+  describe('addLink', () => {
+    it('should add a link between issues', () => {
+      const link = manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' },
+        'related'
+      );
+
+      expect(link.sourceIssueRef).toBe('MIN-630');
+      expect(link.sourceTracker).toBe('linear');
+      expect(link.targetIssueRef).toBe('#42');
+      expect(link.targetTracker).toBe('github');
+      expect(link.direction).toBe('related');
+      expect(link.createdAt).toBeDefined();
+    });
+
+    it('should not duplicate existing links', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      const links = manager.getAllLinks();
+      expect(links.length).toBe(1);
+    });
+
+    it('should update direction on existing link', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' },
+        'related'
+      );
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' },
+        'blocks'
+      );
+
+      const links = manager.getAllLinks();
+      expect(links.length).toBe(1);
+      expect(links[0].direction).toBe('blocks');
+    });
+  });
+
+  describe('removeLink', () => {
+    it('should remove an existing link', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      const removed = manager.removeLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      expect(removed).toBe(true);
+      expect(manager.getAllLinks().length).toBe(0);
+    });
+
+    it('should return false for non-existent link', () => {
+      const removed = manager.removeLink(
+        { ref: 'MIN-999', tracker: 'linear' },
+        { ref: '#999', tracker: 'github' }
+      );
+
+      expect(removed).toBe(false);
+    });
+  });
+
+  describe('getLinkedIssues', () => {
+    it('should find links where issue is source', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      const links = manager.getLinkedIssues('MIN-630', 'linear');
+      expect(links.length).toBe(1);
+      expect(links[0].targetIssueRef).toBe('#42');
+    });
+
+    it('should find links where issue is target', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      const links = manager.getLinkedIssues('#42', 'github');
+      expect(links.length).toBe(1);
+      expect(links[0].sourceIssueRef).toBe('MIN-630');
+    });
+  });
+
+  describe('findLinkedIssue', () => {
+    it('should find linked issue in another tracker', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      expect(manager.findLinkedIssue('MIN-630', 'linear', 'github')).toBe('#42');
+      expect(manager.findLinkedIssue('#42', 'github', 'linear')).toBe('MIN-630');
+    });
+
+    it('should return null when no link exists', () => {
+      expect(manager.findLinkedIssue('MIN-999', 'linear', 'github')).toBeNull();
+    });
+  });
+
+  describe('persistence', () => {
+    it('should persist links across manager instances', () => {
+      manager.addLink(
+        { ref: 'MIN-630', tracker: 'linear' },
+        { ref: '#42', tracker: 'github' }
+      );
+
+      // Create new manager instance
+      const newManager = new LinkManager(join(tempDir, 'links.json'));
+      const links = newManager.getAllLinks();
+
+      expect(links.length).toBe(1);
+      expect(links[0].sourceIssueRef).toBe('MIN-630');
+    });
+  });
+});
