@@ -286,32 +286,38 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                   </button>
                 </div>
 
-                {/* Service URLs */}
-                <div className="mt-3 space-y-1">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider">Services</p>
-                  {workspace.frontendUrl && (
-                    <a
-                      href={workspace.frontendUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
-                    >
-                      <Globe className="w-3 h-3" />
-                      Frontend: {workspace.frontendUrl}
-                    </a>
-                  )}
-                  {workspace.apiUrl && (
-                    <a
-                      href={workspace.apiUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
-                    >
-                      <Server className="w-3 h-3" />
-                      API: {workspace.apiUrl}
-                    </a>
-                  )}
-                  {workspace.mrUrl && (
+                {/* Service URLs - only show if containers are running */}
+                {workspace.containers && Object.values(workspace.containers).some(c => c.running) && (
+                  <div className="mt-3 space-y-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider">Services</p>
+                    {workspace.frontendUrl && workspace.containers?.frontend?.running && (
+                      <a
+                        href={workspace.frontendUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+                      >
+                        <Globe className="w-3 h-3" />
+                        Frontend: {workspace.frontendUrl}
+                      </a>
+                    )}
+                    {workspace.apiUrl && workspace.containers?.api?.running && (
+                      <a
+                        href={workspace.apiUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+                      >
+                        <Server className="w-3 h-3" />
+                        API: {workspace.apiUrl}
+                      </a>
+                    )}
+                  </div>
+                )}
+
+                {/* MR URL - always show if available */}
+                {workspace.mrUrl && (
+                  <div className="mt-3">
                     <a
                       href={workspace.mrUrl}
                       target="_blank"
@@ -321,8 +327,15 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                       <GitMerge className="w-3 h-3" />
                       Merge Request
                     </a>
-                  )}
-                </div>
+                  </div>
+                )}
+
+                {/* Hint about containers not running */}
+                {workspace.hasDocker && (!workspace.containers || !Object.values(workspace.containers).some(c => c.running)) && (
+                  <div className="mt-3 text-xs text-gray-500">
+                    <span className="text-yellow-500">Containers not running.</span> Start with: <code className="bg-gray-800 px-1 rounded">docker compose up -d</code>
+                  </div>
+                )}
 
                 {/* Container status */}
                 {workspace.containers && (
