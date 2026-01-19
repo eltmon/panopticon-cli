@@ -105,8 +105,47 @@ export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssu
 
   if (issuesLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-400">Loading issues...</div>
+      <div className="space-y-4">
+        {/* Skeleton filter bar */}
+        <div className="flex items-center gap-2 animate-pulse">
+          <div className="w-4 h-4 bg-gray-700 rounded" />
+          <div className="w-16 h-4 bg-gray-700 rounded" />
+          <div className="w-24 h-6 bg-gray-700 rounded" />
+          <div className="w-20 h-6 bg-gray-700 rounded" />
+          <div className="w-28 h-6 bg-gray-700 rounded" />
+        </div>
+
+        {/* Skeleton columns */}
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {STATUS_ORDER.map((status) => (
+            <div key={status} className="flex-shrink-0 w-80">
+              <div className={`border-t-4 ${COLUMN_COLORS[status]} bg-gray-800 rounded-lg`}>
+                <div className="px-4 py-3 border-b border-gray-700">
+                  <div className="flex items-center justify-between">
+                    <div className="h-5 bg-gray-700 rounded w-24 animate-pulse" />
+                    <div className="h-4 bg-gray-700 rounded w-6 animate-pulse" />
+                  </div>
+                </div>
+                <div className="p-2 space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="bg-gray-700 rounded-lg p-3 border-l-4 border-l-gray-600 animate-pulse">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-2 h-2 bg-gray-600 rounded-full" />
+                        <div className="h-4 bg-gray-600 rounded w-16" />
+                      </div>
+                      <div className="h-4 bg-gray-600 rounded w-full mb-1" />
+                      <div className="h-4 bg-gray-600 rounded w-3/4" />
+                      <div className="flex gap-2 mt-3">
+                        <div className="h-5 bg-gray-600 rounded w-16" />
+                        <div className="h-5 bg-gray-600 rounded w-12" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }

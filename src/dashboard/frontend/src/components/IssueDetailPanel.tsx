@@ -303,8 +303,27 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
           </div>
         )}
 
+        {/* Loading skeleton while fetching workspace info */}
+        {workspaceLoading && (
+          <div className="bg-gray-700/30 border border-gray-600/50 rounded-lg p-4 mb-4 animate-pulse">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-gray-600 rounded-full shrink-0" />
+              <div className="flex-1 space-y-3">
+                <div className="h-4 bg-gray-600 rounded w-32" />
+                <div className="h-3 bg-gray-600 rounded w-full" />
+                <div className="h-3 bg-gray-600 rounded w-3/4" />
+                <div className="flex gap-2 mt-3">
+                  <div className="h-6 bg-gray-600 rounded w-20" />
+                  <div className="h-6 bg-gray-600 rounded w-16" />
+                  <div className="h-6 bg-gray-600 rounded w-24" />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Workspace Info - Show when workspace exists */}
-        {workspace?.exists && (
+        {!workspaceLoading && workspace?.exists && (
           <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 bg-green-900/50 rounded-full flex items-center justify-center shrink-0">
@@ -573,7 +592,15 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
           </div>
         )}
 
-        {/* Action Buttons */}
+        {/* Action Buttons - Only show when workspace data is loaded */}
+        {workspaceLoading && (
+          <div className="space-y-3 animate-pulse">
+            <div className="h-12 bg-gray-600 rounded-lg w-full" />
+            <div className="h-12 bg-gray-700 rounded-lg w-full" />
+          </div>
+        )}
+
+        {!workspaceLoading && (
         <div className="space-y-3">
           {/* Start Agent Button */}
           <button
@@ -633,7 +660,9 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
             <p className="text-red-400 text-xs">Failed to create workspace. Check server logs.</p>
           )}
         </div>
+        )}
 
+        {!workspaceLoading && (
         <div className="text-xs text-gray-500 mt-3 space-y-1">
           <p>
             <strong>Start Agent:</strong> {workspace?.exists ? 'Starts autonomous agent in existing workspace' : 'Creates workspace + starts autonomous agent'}
@@ -644,6 +673,7 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
             </p>
           )}
         </div>
+        )}
       </div>
     </div>
   );
