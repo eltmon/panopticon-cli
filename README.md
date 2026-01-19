@@ -288,6 +288,69 @@ GUPP ensures agents are self-propelling:
 3. Pending work is injected into the agent's prompt
 4. Completed work is popped from the hook
 
+## Development
+
+### Dev vs Production Strategy
+
+Panopticon uses a **shared config, switchable CLI** approach:
+
+```
+~/.panopticon/           # Shared by both dev and prod
+├── config.toml          # Settings
+├── projects.json        # Registered projects
+├── project-mappings.json # Linear → local path mappings
+├── agents/              # Agent state
+└── skills/              # Shared skills
+```
+
+Both dev and production versions read/write the same config, so you can switch between them freely.
+
+### Running in Development Mode
+
+```bash
+# Clone and setup
+git clone https://github.com/eltmon/panopticon.git
+cd panopticon
+npm install
+
+# Link dev version globally (makes 'pan' use your local code)
+npm link
+
+# Start the dashboard (with hot reload)
+cd src/dashboard
+npm run install:all
+npm run dev
+# → Frontend: http://localhost:3001
+# → API: http://localhost:3002
+```
+
+### Switching Between Dev and Prod
+
+```bash
+# Use dev version (from your local repo)
+cd /path/to/panopticon && npm link
+
+# Switch back to stable release
+npm unlink panopticon-cli
+npm install -g panopticon-cli
+```
+
+### Dashboard Modes
+
+| Mode | Command | Use Case |
+|------|---------|----------|
+| **Dev** | `cd src/dashboard && npm run dev` | Active development, hot reload |
+| **Prod** | `pan up` | Stable usage, serves built files |
+
+### Working on Panopticon While Using It
+
+If you're both developing Panopticon AND using it for your own projects:
+
+1. **Use `npm link`** so CLI changes take effect immediately
+2. **Run dashboard from source** for hot reload on UI changes
+3. **Config is shared** - workspaces/agents work the same either way
+4. **Test in a real project** - your own usage is the best test
+
 ## ⭐ Star History
 
 <a href="https://star-history.com/#eltmon/panopticon&Date">
