@@ -1,3 +1,10 @@
+export interface LinearProject {
+  id: string;
+  name: string;
+  color: string;
+  icon?: string;
+}
+
 export interface Issue {
   id: string;
   identifier: string;
@@ -13,6 +20,7 @@ export interface Issue {
   url: string;
   createdAt: string;
   updatedAt: string;
+  project?: LinearProject;
 }
 
 export interface GitStatus {

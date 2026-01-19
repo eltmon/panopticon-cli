@@ -167,6 +167,12 @@ app.get('/api/issues', async (_req, res) => {
                   name
                 }
               }
+              project {
+                id
+                name
+                color
+                icon
+              }
             }
           }
         }
@@ -214,6 +220,12 @@ app.get('/api/issues', async (_req, res) => {
       url: issue.url,
       createdAt: issue.createdAt,
       updatedAt: issue.updatedAt,
+      project: issue.project ? {
+        id: issue.project.id,
+        name: issue.project.name,
+        color: issue.project.color,
+        icon: issue.project.icon,
+      } : undefined,
     }));
 
     res.json(formatted);
@@ -222,6 +234,95 @@ app.get('/api/issues', async (_req, res) => {
     res.status(500).json({ error: 'Failed to fetch issues: ' + error.message });
   }
 });
+
+// Get project mappings (Linear project -> local directory)
+const PROJECT_MAPPINGS_FILE = join(homedir(), '.panopticon', 'project-mappings.json');
+
+interface ProjectMapping {
+  linearProjectId: string;
+  linearProjectName: string;
+  linearPrefix: string;  // e.g., "MIN"
+  localPath: string;
+}
+
+function getProjectMappings(): ProjectMapping[] {
+  try {
+    if (existsSync(PROJECT_MAPPINGS_FILE)) {
+      return JSON.parse(readFileSync(PROJECT_MAPPINGS_FILE, 'utf-8'));
+    }
+  } catch {}
+  return [];
+}
+
+function saveProjectMappings(mappings: ProjectMapping[]) {
+  const dir = join(homedir(), '.panopticon');
+  if (!existsSync(dir)) {
+    require('fs').mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(PROJECT_MAPPINGS_FILE, JSON.stringify(mappings, null, 2));
+}
+
+// Get all project mappings
+app.get('/api/project-mappings', (_req, res) => {
+  res.json(getProjectMappings());
+});
+
+// Update project mappings
+app.put('/api/project-mappings', (req, res) => {
+  const mappings = req.body;
+  if (!Array.isArray(mappings)) {
+    return res.status(400).json({ error: 'Expected array of mappings' });
+  }
+  saveProjectMappings(mappings);
+  res.json({ success: true, mappings });
+});
+
+// Add or update a single project mapping
+app.post('/api/project-mappings', (req, res) => {
+  const { linearProjectId, linearProjectName, linearPrefix, localPath } = req.body;
+  if (!linearProjectId || !localPath) {
+    return res.status(400).json({ error: 'linearProjectId and localPath required' });
+  }
+
+  const mappings = getProjectMappings();
+  const existing = mappings.findIndex(m => m.linearProjectId === linearProjectId);
+
+  const mapping: ProjectMapping = {
+    linearProjectId,
+    linearProjectName: linearProjectName || '',
+    linearPrefix: linearPrefix || '',
+    localPath,
+  };
+
+  if (existing >= 0) {
+    mappings[existing] = mapping;
+  } else {
+    mappings.push(mapping);
+  }
+
+  saveProjectMappings(mappings);
+  res.json({ success: true, mapping });
+});
+
+// Get local path for a Linear project (used when creating workspaces)
+function getProjectPath(linearProjectId?: string, issuePrefix?: string): string {
+  const mappings = getProjectMappings();
+
+  // Try to find by project ID first
+  if (linearProjectId) {
+    const mapping = mappings.find(m => m.linearProjectId === linearProjectId);
+    if (mapping) return mapping.localPath;
+  }
+
+  // Try to find by issue prefix (e.g., "MIN" from "MIN-645")
+  if (issuePrefix) {
+    const mapping = mappings.find(m => m.linearPrefix === issuePrefix);
+    if (mapping) return mapping.localPath;
+  }
+
+  // Fall back to default project
+  return getDefaultProjectPath();
+}
 
 // Get git status for a workspace path
 function getGitStatus(workspacePath: string): { branch: string; uncommittedFiles: number; latestCommit: string } | null {
@@ -505,14 +606,16 @@ app.get('/api/activity/:id', (req, res) => {
 
 // Create workspace (without agent)
 app.post('/api/workspaces', (req, res) => {
-  const { issueId } = req.body;
+  const { issueId, projectId } = req.body;
 
   if (!issueId) {
     return res.status(400).json({ error: 'issueId required' });
   }
 
   try {
-    const projectPath = getDefaultProjectPath();
+    // Extract prefix from issue ID (e.g., "MIN" from "MIN-645")
+    const issuePrefix = issueId.split('-')[0];
+    const projectPath = getProjectPath(projectId, issuePrefix);
     const activityId = spawnPanCommand(
       ['workspace', 'create', issueId],
       `Create workspace for ${issueId}`,
@@ -533,14 +636,16 @@ app.post('/api/workspaces', (req, res) => {
 
 // Start agent for issue
 app.post('/api/agents', (req, res) => {
-  const { issueId } = req.body;
+  const { issueId, projectId } = req.body;
 
   if (!issueId) {
     return res.status(400).json({ error: 'issueId required' });
   }
 
   try {
-    const projectPath = getDefaultProjectPath();
+    // Extract prefix from issue ID (e.g., "MIN" from "MIN-645")
+    const issuePrefix = issueId.split('-')[0];
+    const projectPath = getProjectPath(projectId, issuePrefix);
     const activityId = spawnPanCommand(
       ['work', 'issue', issueId],
       `Start agent for ${issueId}`,

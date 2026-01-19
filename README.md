@@ -57,6 +57,41 @@ LINEAR_API_KEY=lin_api_xxxxx
 GITHUB_TOKEN=ghp_xxxxx  # Optional: for secondary tracker
 ```
 
+### Register Projects
+
+Register your local project directories so Panopticon knows where to create workspaces:
+
+```bash
+# Register a project
+pan project add /path/to/your/project --name myproject
+
+# List registered projects
+pan project list
+```
+
+### Map Linear Projects to Local Directories
+
+If you have multiple Linear projects, configure which local directory each maps to. Create/edit `~/.panopticon/project-mappings.json`:
+
+```json
+[
+  {
+    "linearProjectId": "abc123",
+    "linearProjectName": "Mind Your Now",
+    "linearPrefix": "MIN",
+    "localPath": "/home/user/projects/myn"
+  },
+  {
+    "linearProjectId": "def456",
+    "linearProjectName": "Househunt",
+    "linearPrefix": "HH",
+    "localPath": "/home/user/projects/househunt"
+  }
+]
+```
+
+The dashboard uses this mapping to determine where to create workspaces when you click "Create Workspace" or "Start Agent" for an issue.
+
 ## Commands
 
 ### Core Commands

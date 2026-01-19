@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Issue, Agent, STATUS_ORDER, STATUS_LABELS } from '../types';
-import { ExternalLink, User, Tag, Play, Eye, MessageCircle, X, Loader2 } from 'lucide-react';
+import { Issue, Agent, LinearProject, STATUS_ORDER, STATUS_LABELS } from '../types';
+import { ExternalLink, User, Tag, Play, Eye, MessageCircle, X, Loader2, Filter } from 'lucide-react';
 
 async function fetchIssues(): Promise<Issue[]> {
   const res = await fetch('/api/issues');
@@ -55,6 +55,7 @@ interface KanbanBoardProps {
 
 export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssue: externalOnSelectIssue }: KanbanBoardProps) {
   const [internalSelectedIssue, setInternalSelectedIssue] = useState<string | null>(null);
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set()); // Empty = all projects
 
   // Use external state if provided, otherwise use internal state
   const selectedIssue = externalSelectedIssue !== undefined ? externalSelectedIssue : internalSelectedIssue;
@@ -70,6 +71,37 @@ export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssu
     queryFn: fetchAgents,
     refetchInterval: 5000, // Refresh every 5 seconds
   });
+
+  // Extract unique projects from issues
+  const projects = useMemo(() => {
+    if (!issues) return [];
+    const projectMap = new Map<string, LinearProject>();
+    for (const issue of issues) {
+      if (issue.project && !projectMap.has(issue.project.id)) {
+        projectMap.set(issue.project.id, issue.project);
+      }
+    }
+    return Array.from(projectMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [issues]);
+
+  // Filter issues by selected projects
+  const filteredIssues = useMemo(() => {
+    if (!issues) return [];
+    if (selectedProjects.size === 0) return issues; // Show all if none selected
+    return issues.filter(issue => issue.project && selectedProjects.has(issue.project.id));
+  }, [issues, selectedProjects]);
+
+  const toggleProject = (projectId: string) => {
+    setSelectedProjects(prev => {
+      const next = new Set(prev);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
+  };
 
   if (issuesLoading) {
     return (
@@ -87,10 +119,45 @@ export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssu
     );
   }
 
-  const grouped = groupByStatus(issues || []);
+  const grouped = groupByStatus(filteredIssues);
 
   return (
-    <div className="flex gap-4 overflow-x-auto pb-4">
+    <div className="space-y-4">
+      {/* Project filter bar */}
+      {projects.length > 1 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <Filter className="w-4 h-4 text-gray-400" />
+          <span className="text-sm text-gray-400">Projects:</span>
+          {projects.map((project) => (
+            <button
+              key={project.id}
+              onClick={() => toggleProject(project.id)}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${
+                selectedProjects.size === 0 || selectedProjects.has(project.id)
+                  ? 'bg-gray-700 text-white'
+                  : 'bg-gray-800 text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-full"
+                style={{ backgroundColor: project.color || '#6b7280' }}
+              />
+              {project.name}
+            </button>
+          ))}
+          {selectedProjects.size > 0 && (
+            <button
+              onClick={() => setSelectedProjects(new Set())}
+              className="text-xs text-gray-400 hover:text-white ml-2"
+            >
+              Clear filter
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Kanban columns */}
+      <div className="flex gap-4 overflow-x-auto pb-4">
       {STATUS_ORDER.map((status) => (
         <div key={status} className="flex-shrink-0 w-80">
           <div className={`border-t-4 ${COLUMN_COLORS[status]} bg-gray-800 rounded-lg`}>
@@ -126,6 +193,7 @@ export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssu
           </div>
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -224,6 +292,14 @@ function IssueCard({ issue, agent, isSelected, onSelect }: IssueCardProps) {
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
+            {/* Project color indicator */}
+            {issue.project && (
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: issue.project.color || '#6b7280' }}
+                title={issue.project.name}
+              />
+            )}
             {isRunning && (
               <div className="flex gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '0ms' }} />
