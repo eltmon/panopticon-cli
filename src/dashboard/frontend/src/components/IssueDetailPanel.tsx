@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   X,
   ExternalLink,
@@ -18,31 +19,65 @@ interface IssueDetailPanelProps {
   onStartAgent?: () => void;
 }
 
+// Clipboard helper that works without HTTPS
+function copyToClipboard(text: string): boolean {
+  // Try modern API first
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  // Fallback for non-secure contexts (like HTTP over network IP)
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  textArea.style.top = '-999999px';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return true;
+  } catch {
+    document.body.removeChild(textArea);
+    return false;
+  }
+}
+
 export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPanelProps) {
   const [copied, setCopied] = useState(false);
   const [copiedWorkspace, setCopiedWorkspace] = useState(false);
 
   const handleCopyIdentifier = () => {
-    navigator.clipboard.writeText(issue.identifier);
+    copyToClipboard(issue.identifier);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleStartAgent = () => {
-    // Copy the command to clipboard and show instructions
     const command = `pan work issue ${issue.identifier}`;
-    navigator.clipboard.writeText(command);
-    alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your terminal to start an agent.`);
+    const success = copyToClipboard(command);
+    if (success) {
+      alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your terminal to start an agent.`);
+    } else {
+      alert(`Copy this command:\n\n${command}\n\nRun it in your terminal to start an agent.`);
+    }
     onStartAgent?.();
   };
 
   const handleCreateWorkspace = () => {
-    // Copy the workspace create command
     const command = `pan workspace create ${issue.identifier}`;
-    navigator.clipboard.writeText(command);
+    const success = copyToClipboard(command);
     setCopiedWorkspace(true);
     setTimeout(() => setCopiedWorkspace(false), 2000);
-    alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your project directory to create a workspace without starting an agent.`);
+    if (success) {
+      alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your project directory to create a workspace without starting an agent.`);
+    } else {
+      alert(`Copy this command:\n\n${command}\n\nRun it in your project directory to create a workspace.`);
+    }
   };
 
   const priorityLabels: Record<number, { label: string; color: string }> = {
@@ -135,8 +170,8 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
         {issue.description && (
           <div className="mb-6">
             <h3 className="text-sm font-medium text-gray-400 mb-2">Description</h3>
-            <div className="text-sm text-gray-300 whitespace-pre-wrap bg-gray-900 rounded p-3 max-h-64 overflow-y-auto">
-              {issue.description}
+            <div className="text-sm text-gray-300 bg-gray-900 rounded p-3 max-h-64 overflow-y-auto prose prose-sm prose-invert prose-p:my-2 prose-headings:my-2 prose-ul:my-1 prose-li:my-0">
+              <ReactMarkdown>{issue.description}</ReactMarkdown>
             </div>
           </div>
         )}

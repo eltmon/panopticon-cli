@@ -14,6 +14,32 @@ import {
 } from 'lucide-react';
 import { Agent } from '../types';
 
+// Clipboard helper that works without HTTPS
+function copyToClipboard(text: string): boolean {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  textArea.style.top = '-999999px';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return true;
+  } catch {
+    document.body.removeChild(textArea);
+    return false;
+  }
+}
+
 interface WorkspacePanelProps {
   agent: Agent;
   issueUrl?: string;
@@ -69,7 +95,7 @@ export function WorkspacePanel({ agent, issueUrl, onClose }: WorkspacePanelProps
   });
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(tmuxCommand);
+    copyToClipboard(tmuxCommand);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [tmuxCommand]);
