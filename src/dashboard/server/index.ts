@@ -173,6 +173,12 @@ app.get('/api/issues', async (_req, res) => {
                 color
                 icon
               }
+              team {
+                id
+                name
+                color
+                icon
+              }
             }
           }
         }
@@ -220,11 +226,17 @@ app.get('/api/issues', async (_req, res) => {
       url: issue.url,
       createdAt: issue.createdAt,
       updatedAt: issue.updatedAt,
+      // Use project if available, otherwise fall back to team
       project: issue.project ? {
         id: issue.project.id,
         name: issue.project.name,
         color: issue.project.color,
         icon: issue.project.icon,
+      } : issue.team ? {
+        id: issue.team.id,
+        name: issue.team.name,
+        color: issue.team.color,
+        icon: issue.team.icon,
       } : undefined,
     }));
 
@@ -602,6 +614,53 @@ app.get('/api/activity/:id', (req, res) => {
     return res.status(404).json({ error: 'Activity not found' });
   }
   res.json(activity);
+});
+
+// Get workspace info for an issue
+app.get('/api/workspaces/:issueId', (req, res) => {
+  const { issueId } = req.params;
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+
+  // Convert issue ID to workspace path (e.g., MIN-645 -> feature-min-645)
+  const workspaceName = `feature-${issueId.toLowerCase()}`;
+  const workspacePath = join(projectPath, 'workspaces', workspaceName);
+
+  if (!existsSync(workspacePath)) {
+    return res.json({ exists: false, issueId });
+  }
+
+  // Get git status
+  const git = getGitStatus(workspacePath);
+
+  // Check for WORKSPACE.md or docker-compose.yml to get service info
+  let services: { name: string; url?: string }[] = [];
+  const workspaceMd = join(workspacePath, 'WORKSPACE.md');
+  const dockerCompose = join(workspacePath, 'docker-compose.yml');
+
+  // Try to extract service URLs from WORKSPACE.md if it exists
+  if (existsSync(workspaceMd)) {
+    try {
+      const content = readFileSync(workspaceMd, 'utf-8');
+      // Look for URLs in the format: Frontend: http://... or Backend: http://...
+      const urlMatches = content.matchAll(/(\w+):\s*(https?:\/\/[^\s\n]+)/gi);
+      for (const match of urlMatches) {
+        services.push({ name: match[1], url: match[2] });
+      }
+    } catch {}
+  }
+
+  // Check if docker-compose exists (indicates containerized workspace)
+  const hasDocker = existsSync(dockerCompose);
+
+  res.json({
+    exists: true,
+    issueId,
+    path: workspacePath,
+    git,
+    services,
+    hasDocker,
+  });
 });
 
 // Create workspace (without agent)

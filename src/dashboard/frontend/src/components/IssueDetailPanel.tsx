@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import {
   X,
@@ -12,8 +12,21 @@ import {
   Check,
   FolderPlus,
   Loader2,
+  Folder,
+  GitBranch,
+  Globe,
+  Terminal,
 } from 'lucide-react';
-import { Issue } from '../types';
+import { Issue, GitStatus } from '../types';
+
+interface WorkspaceInfo {
+  exists: boolean;
+  issueId: string;
+  path?: string;
+  git?: GitStatus;
+  services?: { name: string; url?: string }[];
+  hasDocker?: boolean;
+}
 
 interface IssueDetailPanelProps {
   issue: Issue;
@@ -52,6 +65,18 @@ function copyToClipboard(text: string): boolean {
 export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPanelProps) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [copiedPath, setCopiedPath] = useState(false);
+
+  // Fetch workspace info
+  const { data: workspace, isLoading: workspaceLoading } = useQuery<WorkspaceInfo>({
+    queryKey: ['workspace', issue.identifier],
+    queryFn: async () => {
+      const res = await fetch(`/api/workspaces/${issue.identifier}`);
+      if (!res.ok) throw new Error('Failed to fetch workspace info');
+      return res.json();
+    },
+    refetchInterval: 5000, // Check for workspace changes
+  });
 
   const handleCopyIdentifier = () => {
     copyToClipboard(issue.identifier);
@@ -59,12 +84,20 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleCopyPath = () => {
+    if (workspace?.path) {
+      copyToClipboard(`cd ${workspace.path}`);
+      setCopiedPath(true);
+      setTimeout(() => setCopiedPath(false), 2000);
+    }
+  };
+
   const startAgentMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issueId: issue.identifier }),
+        body: JSON.stringify({ issueId: issue.identifier, projectId: issue.project?.id }),
       });
       if (!res.ok) throw new Error('Failed to start agent');
       return res.json();
@@ -83,10 +116,14 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
       const res = await fetch('/api/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issueId: issue.identifier }),
+        body: JSON.stringify({ issueId: issue.identifier, projectId: issue.project?.id }),
       });
       if (!res.ok) throw new Error('Failed to create workspace');
       return res.json();
+    },
+    onSuccess: () => {
+      // Refresh workspace info
+      queryClient.invalidateQueries({ queryKey: ['workspace', issue.identifier] });
     },
   });
 
@@ -194,20 +231,84 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
           </div>
         )}
 
-        {/* No Agent Warning */}
-        <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-4">
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 bg-yellow-900/50 rounded-full flex items-center justify-center shrink-0">
-              <Play className="w-4 h-4 text-yellow-400" />
-            </div>
-            <div>
-              <h4 className="text-sm font-medium text-yellow-400">No Agent Running</h4>
-              <p className="text-xs text-gray-400 mt-1">
-                Start an agent or create a workspace to begin work.
-              </p>
+        {/* Workspace Info - Show when workspace exists */}
+        {workspace?.exists && (
+          <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-green-900/50 rounded-full flex items-center justify-center shrink-0">
+                <Folder className="w-4 h-4 text-green-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-sm font-medium text-green-400">Workspace Ready</h4>
+
+                {/* Path with copy button */}
+                <div className="flex items-center gap-2 mt-2">
+                  <code className="text-xs text-gray-300 bg-gray-800 px-2 py-1 rounded truncate flex-1">
+                    {workspace.path}
+                  </code>
+                  <button
+                    onClick={handleCopyPath}
+                    className="text-gray-400 hover:text-white p-1"
+                    title="Copy cd command"
+                  >
+                    {copiedPath ? <Check className="w-4 h-4 text-green-400" /> : <Terminal className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                {/* Git status */}
+                {workspace.git && (
+                  <div className="flex items-center gap-3 mt-2 text-xs">
+                    <span className="flex items-center gap-1 text-gray-400">
+                      <GitBranch className="w-3 h-3" />
+                      {workspace.git.branch}
+                    </span>
+                    {workspace.git.uncommittedFiles > 0 && (
+                      <span className="text-yellow-400">
+                        {workspace.git.uncommittedFiles} uncommitted
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Service URLs */}
+                {workspace.services && workspace.services.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider">Services</p>
+                    {workspace.services.map((service, i) => (
+                      <a
+                        key={i}
+                        href={service.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+                      >
+                        <Globe className="w-3 h-3" />
+                        {service.name}: {service.url}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* No Agent Warning - Only show when no workspace */}
+        {!workspace?.exists && !workspaceLoading && (
+          <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-yellow-900/50 rounded-full flex items-center justify-center shrink-0">
+                <Play className="w-4 h-4 text-yellow-400" />
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-yellow-400">No Workspace</h4>
+                <p className="text-xs text-gray-400 mt-1">
+                  Create a workspace or start an agent to begin work.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="space-y-3">
@@ -230,34 +331,36 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
             ) : (
               <>
                 <Play className="w-5 h-5" />
-                <span className="font-medium">Start Agent</span>
+                <span className="font-medium">{workspace?.exists ? 'Start Agent in Workspace' : 'Start Agent'}</span>
               </>
             )}
           </button>
 
-          {/* Create Workspace Button */}
-          <button
-            onClick={handleCreateWorkspace}
-            disabled={createWorkspaceMutation.isPending || createWorkspaceMutation.isSuccess}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {createWorkspaceMutation.isPending ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span className="font-medium">Creating...</span>
-              </>
-            ) : createWorkspaceMutation.isSuccess ? (
-              <>
-                <Check className="w-5 h-5" />
-                <span className="font-medium">Workspace Created!</span>
-              </>
-            ) : (
-              <>
-                <FolderPlus className="w-5 h-5" />
-                <span className="font-medium">Create Workspace Only</span>
-              </>
-            )}
-          </button>
+          {/* Create Workspace Button - Only show when no workspace */}
+          {!workspace?.exists && (
+            <button
+              onClick={handleCreateWorkspace}
+              disabled={createWorkspaceMutation.isPending || createWorkspaceMutation.isSuccess}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {createWorkspaceMutation.isPending ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span className="font-medium">Creating...</span>
+                </>
+              ) : createWorkspaceMutation.isSuccess ? (
+                <>
+                  <Check className="w-5 h-5" />
+                  <span className="font-medium">Workspace Created!</span>
+                </>
+              ) : (
+                <>
+                  <FolderPlus className="w-5 h-5" />
+                  <span className="font-medium">Create Workspace Only</span>
+                </>
+              )}
+            </button>
+          )}
 
           {/* Error messages */}
           {startAgentMutation.isError && (
@@ -270,11 +373,13 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
 
         <div className="text-xs text-gray-500 mt-3 space-y-1">
           <p>
-            <strong>Start Agent:</strong> Creates workspace + starts autonomous agent
+            <strong>Start Agent:</strong> {workspace?.exists ? 'Starts autonomous agent in existing workspace' : 'Creates workspace + starts autonomous agent'}
           </p>
-          <p>
-            <strong>Create Workspace:</strong> Creates git worktree for manual work
-          </p>
+          {!workspace?.exists && (
+            <p>
+              <strong>Create Workspace:</strong> Creates git worktree for manual work
+            </p>
+          )}
         </div>
       </div>
     </div>
