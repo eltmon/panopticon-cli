@@ -82,10 +82,10 @@ export function spawnAgent(options: SpawnOptions): AgentState {
     }
   }
 
-  // Create tmux session with claude command
+  // Create tmux session with claude command (YOLO mode - skip permissions)
   const claudeCmd = prompt
-    ? `claude --model ${state.model} "${prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`
-    : `claude --model ${state.model}`;
+    ? `claude --dangerously-skip-permissions --model ${state.model} "${prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`
+    : `claude --dangerously-skip-permissions --model ${state.model}`;
 
   createSession(agentId, options.workspace, claudeCmd);
 
@@ -200,8 +200,8 @@ export function recoverAgent(agentId: string): AgentState | null {
   // Build recovery prompt
   const recoveryPrompt = generateRecoveryPrompt(state);
 
-  // Restart the agent with recovery context
-  const claudeCmd = `claude --model ${state.model} "${recoveryPrompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+  // Restart the agent with recovery context (YOLO mode - skip permissions)
+  const claudeCmd = `claude --dangerously-skip-permissions --model ${state.model} "${recoveryPrompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
   createSession(normalizedId, state.workspace, claudeCmd);
 
   // Update state
