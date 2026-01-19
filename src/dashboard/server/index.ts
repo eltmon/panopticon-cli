@@ -3109,9 +3109,9 @@ app.get('/api/planning/:issueId/status', (req, res) => {
                       textParts.push(`\n🔧 **${block.name}**${detail}\n`);
                     }
                   }
-                } else if (json.type === 'content_block_delta' && json.delta?.text) {
-                  textParts.push(json.delta.text);
                 } else if (json.type === 'result' && json.result) {
+                  // Skip content_block_delta - we get complete text from 'assistant' messages
+                  // Deltas are streaming chunks that duplicate the final content
                   // Format result - stringify if it's an object
                   const resultText = typeof json.result === 'object'
                     ? JSON.stringify(json.result, null, 2)
