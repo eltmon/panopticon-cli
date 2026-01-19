@@ -391,6 +391,54 @@ app.post('/api/health/agents/:id/ping', (req, res) => {
   res.json({ success: true, status: 'healthy', hasOutput: !!health.lastOutput });
 });
 
+// Create workspace (without agent)
+app.post('/api/workspaces', (req, res) => {
+  const { issueId } = req.body;
+
+  if (!issueId) {
+    return res.status(400).json({ error: 'issueId required' });
+  }
+
+  try {
+    // Run pan workspace create in background
+    const child = spawn('pan', ['workspace', 'create', issueId], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: homedir(),
+    });
+    child.unref();
+
+    res.json({ success: true, message: `Creating workspace for ${issueId}` });
+  } catch (error: any) {
+    console.error('Error creating workspace:', error);
+    res.status(500).json({ error: 'Failed to create workspace: ' + error.message });
+  }
+});
+
+// Start agent for issue
+app.post('/api/agents', (req, res) => {
+  const { issueId } = req.body;
+
+  if (!issueId) {
+    return res.status(400).json({ error: 'issueId required' });
+  }
+
+  try {
+    // Run pan work issue in background
+    const child = spawn('pan', ['work', 'issue', issueId], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: homedir(),
+    });
+    child.unref();
+
+    res.json({ success: true, message: `Starting agent for ${issueId}` });
+  } catch (error: any) {
+    console.error('Error starting agent:', error);
+    res.status(500).json({ error: 'Failed to start agent: ' + error.message });
+  }
+});
+
 // Get skills
 app.get('/api/skills', (_req, res) => {
   try {

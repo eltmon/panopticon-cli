@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import {
   X,
@@ -10,6 +11,7 @@ import {
   Copy,
   Check,
   FolderPlus,
+  Loader2,
 } from 'lucide-react';
 import { Issue } from '../types';
 
@@ -48,8 +50,8 @@ function copyToClipboard(text: string): boolean {
 }
 
 export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPanelProps) {
+  const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
-  const [copiedWorkspace, setCopiedWorkspace] = useState(false);
 
   const handleCopyIdentifier = () => {
     copyToClipboard(issue.identifier);
@@ -57,27 +59,43 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const startAgentMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueId: issue.identifier }),
+      });
+      if (!res.ok) throw new Error('Failed to start agent');
+      return res.json();
+    },
+    onSuccess: () => {
+      // Refresh agents list after a short delay to allow tmux session to start
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['agents'] });
+      }, 2000);
+      onStartAgent?.();
+    },
+  });
+
+  const createWorkspaceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issueId: issue.identifier }),
+      });
+      if (!res.ok) throw new Error('Failed to create workspace');
+      return res.json();
+    },
+  });
+
   const handleStartAgent = () => {
-    const command = `pan work issue ${issue.identifier}`;
-    const success = copyToClipboard(command);
-    if (success) {
-      alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your terminal to start an agent.`);
-    } else {
-      alert(`Copy this command:\n\n${command}\n\nRun it in your terminal to start an agent.`);
-    }
-    onStartAgent?.();
+    startAgentMutation.mutate();
   };
 
   const handleCreateWorkspace = () => {
-    const command = `pan workspace create ${issue.identifier}`;
-    const success = copyToClipboard(command);
-    setCopiedWorkspace(true);
-    setTimeout(() => setCopiedWorkspace(false), 2000);
-    if (success) {
-      alert(`Command copied to clipboard:\n\n${command}\n\nRun this in your project directory to create a workspace without starting an agent.`);
-    } else {
-      alert(`Copy this command:\n\n${command}\n\nRun it in your project directory to create a workspace.`);
-    }
+    createWorkspaceMutation.mutate();
   };
 
   const priorityLabels: Record<number, { label: string; color: string }> = {
@@ -196,22 +214,58 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
           {/* Start Agent Button */}
           <button
             onClick={handleStartAgent}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors"
+            disabled={startAgentMutation.isPending || startAgentMutation.isSuccess}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Play className="w-5 h-5" />
-            <span className="font-medium">Start Agent</span>
+            {startAgentMutation.isPending ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="font-medium">Starting...</span>
+              </>
+            ) : startAgentMutation.isSuccess ? (
+              <>
+                <Check className="w-5 h-5" />
+                <span className="font-medium">Agent Started!</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-5 h-5" />
+                <span className="font-medium">Start Agent</span>
+              </>
+            )}
           </button>
 
           {/* Create Workspace Button */}
           <button
             onClick={handleCreateWorkspace}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600"
+            disabled={createWorkspaceMutation.isPending || createWorkspaceMutation.isSuccess}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors border border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <FolderPlus className="w-5 h-5" />
-            <span className="font-medium">
-              {copiedWorkspace ? 'Copied!' : 'Create Workspace Only'}
-            </span>
+            {createWorkspaceMutation.isPending ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="font-medium">Creating...</span>
+              </>
+            ) : createWorkspaceMutation.isSuccess ? (
+              <>
+                <Check className="w-5 h-5" />
+                <span className="font-medium">Workspace Created!</span>
+              </>
+            ) : (
+              <>
+                <FolderPlus className="w-5 h-5" />
+                <span className="font-medium">Create Workspace Only</span>
+              </>
+            )}
           </button>
+
+          {/* Error messages */}
+          {startAgentMutation.isError && (
+            <p className="text-red-400 text-xs">Failed to start agent. Check server logs.</p>
+          )}
+          {createWorkspaceMutation.isError && (
+            <p className="text-red-400 text-xs">Failed to create workspace. Check server logs.</p>
+          )}
         </div>
 
         <div className="text-xs text-gray-500 mt-3 space-y-1">
