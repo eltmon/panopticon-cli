@@ -1,0 +1,49 @@
+# Traefik Static Configuration
+# This file configures Traefik's core behavior
+
+# API and Dashboard
+api:
+  dashboard: true
+  insecure: true  # Dashboard accessible without auth on localhost
+
+# Entry Points
+entryPoints:
+  web:
+    address: ":80"
+    # Redirect HTTP to HTTPS
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+
+# Certificate Resolvers
+# Using file provider for mkcert certificates
+certificatesResolvers: {}
+
+# Providers
+providers:
+  # File provider for dynamic configuration
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+  # Docker provider (for future workspace containers)
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: panopticon
+
+# Logging
+log:
+  level: INFO
+  format: common
+
+# Access Logs
+accessLog:
+  format: common

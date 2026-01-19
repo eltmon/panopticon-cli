@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.0
+    container_name: panopticon-traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"       # HTTP
+      - "443:443"     # HTTPS
+      - "8080:8080"   # Traefik Dashboard
+    volumes:
+      # Traefik configuration
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+
+      # TLS certificates (mkcert generated)
+      - ./certs:/etc/traefik/certs:ro
+
+      # Docker socket for service discovery
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    networks:
+      - panopticon
+
+    labels:
+      - "traefik.enable=true"
+
+      # Dashboard routing (traefik.pan.localhost:8080)
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.pan.localhost`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+
+    extra_hosts:
+      # Allow Traefik to reach host services (dashboard on ports 3001/3002)
+      - "host.docker.internal:host-gateway"
+
+networks:
+  panopticon:
+    name: panopticon
+    driver: bridge
