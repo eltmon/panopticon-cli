@@ -81,7 +81,7 @@ export function ActivityPanel({ onClose }: ActivityPanelProps) {
                 </div>
 
                 {/* Output */}
-                <pre className="bg-gray-900 rounded p-2 text-xs text-gray-300 font-mono overflow-x-auto max-h-40 overflow-y-auto">
+                <pre className="bg-gray-900 rounded p-2 text-xs text-gray-300 font-mono overflow-x-auto max-h-96 overflow-y-auto">
                   {activity.output.length > 0
                     ? activity.output.join('\n')
                     : activity.status === 'running'

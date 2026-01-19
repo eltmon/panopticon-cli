@@ -780,10 +780,16 @@ app.get('/api/workspaces/:issueId', (req, res) => {
   }
 
   // Check if docker-compose exists (indicates containerized workspace)
-  // Look in multiple places: root, .devcontainer
+  // Look in multiple places: root, .devcontainer (with various naming conventions)
+  const devcontainerPath = join(workspacePath, '.devcontainer');
   const hasDocker = existsSync(dockerCompose) ||
-                    existsSync(join(workspacePath, '.devcontainer', 'docker-compose.yml')) ||
-                    existsSync(join(workspacePath, '.devcontainer', 'compose.yaml'));
+                    existsSync(join(workspacePath, 'docker-compose.yml')) ||
+                    existsSync(join(workspacePath, 'compose.yaml')) ||
+                    existsSync(join(devcontainerPath, 'docker-compose.yml')) ||
+                    existsSync(join(devcontainerPath, 'docker-compose.devcontainer.yml')) ||
+                    existsSync(join(devcontainerPath, 'compose.yaml')) ||
+                    existsSync(join(devcontainerPath, 'compose.infra.yml')) ||
+                    existsSync(devcontainerPath); // .devcontainer dir exists = containerized
 
   // Get container status
   const containers = hasDocker ? getContainerStatus(issueId) : null;
