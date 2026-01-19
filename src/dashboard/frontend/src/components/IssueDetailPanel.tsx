@@ -376,25 +376,34 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                 {!workspace.hasDocker && (
                   <div className="mt-3">
                     {workspace.canContainerize ? (
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-gray-500">Git-only workspace.</span>
-                        <button
-                          onClick={handleContainerize}
-                          disabled={containerizeMutation.isPending}
-                          className="flex items-center gap-1 px-2 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-xs rounded transition-colors"
-                        >
-                          {containerizeMutation.isPending ? (
-                            <>
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              Setting up...
-                            </>
-                          ) : (
-                            <>
-                              <Box className="w-3 h-3" />
-                              Containerize
-                            </>
-                          )}
-                        </button>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-gray-500">Git-only workspace.</span>
+                          <button
+                            onClick={handleContainerize}
+                            disabled={containerizeMutation.isPending}
+                            className="flex items-center gap-1 px-2 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-xs rounded transition-colors"
+                          >
+                            {containerizeMutation.isPending ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Setting up...
+                              </>
+                            ) : (
+                              <>
+                                <Box className="w-3 h-3" />
+                                Containerize
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        {containerizeMutation.isError && (
+                          <div className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded">
+                            {containerizeMutation.error instanceof Error
+                              ? containerizeMutation.error.message
+                              : 'Failed to containerize workspace'}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="text-xs text-gray-500">
