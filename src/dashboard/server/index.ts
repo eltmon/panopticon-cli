@@ -950,8 +950,43 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
     });
 
     child.on('close', (code) => {
-      appendActivityOutput(activityId, `[${new Date().toISOString()}] Process exited with code ${code}`);
-      updateActivity(activityId, { status: code === 0 ? 'completed' : 'failed' });
+      appendActivityOutput(activityId, `[${new Date().toISOString()}] new-feature exited with code ${code}`);
+
+      if (code === 0) {
+        // Now start the containers
+        appendActivityOutput(activityId, '');
+        appendActivityOutput(activityId, '=== Starting containers ===');
+
+        const workspaceDir = join(projectPath, 'workspaces', `feature-${featureName}`);
+        const devUp = spawn('./dev', ['up'], {
+          cwd: workspaceDir,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        devUp.stdout?.on('data', (data) => {
+          data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+            appendActivityOutput(activityId, line);
+          });
+        });
+        devUp.stderr?.on('data', (data) => {
+          data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+            appendActivityOutput(activityId, `[stderr] ${line}`);
+          });
+        });
+
+        devUp.on('close', (devCode) => {
+          appendActivityOutput(activityId, `[${new Date().toISOString()}] ./dev up exited with code ${devCode}`);
+          updateActivity(activityId, { status: devCode === 0 ? 'completed' : 'failed' });
+        });
+
+        devUp.on('error', (err) => {
+          appendActivityOutput(activityId, `[error] ${err.message}`);
+          updateActivity(activityId, { status: 'failed' });
+        });
+      } else {
+        updateActivity(activityId, { status: 'failed' });
+      }
     });
 
     child.on('error', (err) => {
@@ -968,6 +1003,81 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
   } catch (error: any) {
     console.error('Error containerizing workspace:', error);
     res.status(500).json({ error: 'Failed to containerize workspace: ' + error.message });
+  }
+});
+
+// Start containers for an existing workspace
+app.post('/api/workspaces/:issueId/start', (req, res) => {
+  const { issueId } = req.params;
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
+  const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+
+  // Check workspace exists
+  if (!existsSync(workspacePath)) {
+    return res.status(400).json({ error: 'Workspace does not exist' });
+  }
+
+  // Check for ./dev script
+  const devScript = join(workspacePath, 'dev');
+  if (!existsSync(devScript)) {
+    return res.status(400).json({ error: 'Workspace has no ./dev script' });
+  }
+
+  // Check if Docker is running
+  try {
+    execSync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
+  } catch {
+    return res.status(400).json({ error: 'Docker is not running. Start Docker Desktop first.' });
+  }
+
+  try {
+    const activityId = Date.now().toString();
+
+    logActivity({
+      id: activityId,
+      timestamp: new Date().toISOString(),
+      command: `./dev up (${issueId})`,
+      status: 'running',
+      output: [],
+    });
+
+    const child = spawn('./dev', ['up'], {
+      cwd: workspacePath,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout?.on('data', (data) => {
+      data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+        appendActivityOutput(activityId, line);
+      });
+    });
+    child.stderr?.on('data', (data) => {
+      data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+        appendActivityOutput(activityId, `[stderr] ${line}`);
+      });
+    });
+
+    child.on('close', (code) => {
+      appendActivityOutput(activityId, `[${new Date().toISOString()}] ./dev up exited with code ${code}`);
+      updateActivity(activityId, { status: code === 0 ? 'completed' : 'failed' });
+    });
+
+    child.on('error', (err) => {
+      appendActivityOutput(activityId, `[error] ${err.message}`);
+      updateActivity(activityId, { status: 'failed' });
+    });
+
+    res.json({
+      success: true,
+      message: `Starting containers for ${issueId}`,
+      activityId,
+    });
+  } catch (error: any) {
+    console.error('Error starting containers:', error);
+    res.status(500).json({ error: 'Failed to start containers: ' + error.message });
   }
 });
 

@@ -171,6 +171,26 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
     },
   });
 
+  const startContainersMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/workspaces/${issue.identifier}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to start containers');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      // Refresh workspace info after a delay to allow containers to start
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['workspace', issue.identifier] });
+      }, 5000);
+    },
+  });
+
   const handleStartAgent = () => {
     startAgentMutation.mutate();
   };
@@ -181,6 +201,10 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
 
   const handleContainerize = () => {
     containerizeMutation.mutate();
+  };
+
+  const handleStartContainers = () => {
+    startContainersMutation.mutate();
   };
 
   const priorityLabels: Record<number, { label: string; color: string }> = {
@@ -365,10 +389,36 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                   </div>
                 )}
 
-                {/* Hint about containers not running */}
+                {/* Start containers button when not running */}
                 {workspace.hasDocker && (!workspace.containers || !Object.values(workspace.containers).some(c => c.running)) && (
-                  <div className="mt-3 text-xs text-gray-500">
-                    <span className="text-yellow-500">Containers not running.</span> Start with: <code className="bg-gray-800 px-1 rounded">docker compose up -d</code>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-yellow-500">Containers not running.</span>
+                      <button
+                        onClick={handleStartContainers}
+                        disabled={startContainersMutation.isPending}
+                        className="flex items-center gap-1 px-2 py-1 bg-green-600 hover:bg-green-500 disabled:bg-green-800 text-white text-xs rounded transition-colors"
+                      >
+                        {startContainersMutation.isPending ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Starting...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3" />
+                            Start Containers
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    {startContainersMutation.isError && (
+                      <div className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded">
+                        {startContainersMutation.error instanceof Error
+                          ? startContainersMutation.error.message
+                          : 'Failed to start containers'}
+                      </div>
+                    )}
                   </div>
                 )}
 
