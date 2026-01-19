@@ -1,35 +1,51 @@
-# Panopticon Dashboard Routing
-# Routes requests to the Panopticon dashboard running on the host
+# Dynamic routing configuration for Panopticon Dashboard
+# Routes traffic from pan.localhost to host-based services
 
 http:
   routers:
-    # Main dashboard frontend
+    # Dashboard Frontend (pan.localhost)
     panopticon-frontend:
-      rule: "Host(`pan.localhost`)"
+      rule: "Host(`pan.localhost`) && !PathPrefix(`/api`)"
       entryPoints:
         - websecure
       service: panopticon-frontend
-      tls: {}
-      priority: 10
+      tls:
+        domains:
+          - main: "pan.localhost"
+            sans:
+              - "*.pan.localhost"
 
-    # API routes (higher priority than frontend)
+    # Dashboard API (pan.localhost/api/*)
     panopticon-api:
       rule: "Host(`pan.localhost`) && PathPrefix(`/api`)"
       entryPoints:
         - websecure
       service: panopticon-api
+      middlewares:
+        - api-stripprefix
       tls: {}
-      priority: 20
 
   services:
+    # Frontend service (running on host:3001)
     panopticon-frontend:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3001"
-        passHostHeader: true
 
+    # API service (running on host:3002)
     panopticon-api:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3002"
-        passHostHeader: true
+
+  middlewares:
+    # Strip /api prefix before forwarding to API service
+    api-stripprefix:
+      stripPrefix:
+        prefixes:
+          - "/api"
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/_wildcard.pan.localhost.pem
+      keyFile: /etc/traefik/certs/_wildcard.pan.localhost-key.pem

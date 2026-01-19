@@ -12,6 +12,14 @@ export const AGENTS_DIR = join(PANOPTICON_HOME, 'agents');
 export const BACKUPS_DIR = join(PANOPTICON_HOME, 'backups');
 export const COSTS_DIR = join(PANOPTICON_HOME, 'costs');
 
+// Traefik directories
+export const TRAEFIK_DIR = join(PANOPTICON_HOME, 'traefik');
+export const TRAEFIK_DYNAMIC_DIR = join(TRAEFIK_DIR, 'dynamic');
+export const TRAEFIK_CERTS_DIR = join(TRAEFIK_DIR, 'certs');
+
+// Legacy certs directory (for backwards compatibility)
+export const CERTS_DIR = join(PANOPTICON_HOME, 'certs');
+
 // Config files
 export const CONFIG_FILE = join(CONFIG_DIR, 'config.toml');
 
@@ -43,9 +51,21 @@ export const SYNC_TARGETS = {
 
 export type Runtime = keyof typeof SYNC_TARGETS;
 
-// Templates directory
+// Templates directory (in user's ~/.panopticon)
 export const TEMPLATES_DIR = join(PANOPTICON_HOME, 'templates');
 export const CLAUDE_MD_TEMPLATES = join(TEMPLATES_DIR, 'claude-md', 'sections');
+
+// Source templates directory (bundled with the package)
+// This is resolved at runtime from the package root
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const currentFile = fileURLToPath(import.meta.url);
+const distDir = dirname(currentFile); // dist/ or dist/lib/ depending on bundler
+const packageRoot = dirname(distDir);  // package root
+
+export const SOURCE_TEMPLATES_DIR = join(packageRoot, 'templates');
+export const SOURCE_TRAEFIK_TEMPLATES = join(SOURCE_TEMPLATES_DIR, 'traefik');
 
 // All directories to create on init
 export const INIT_DIRS = [
@@ -57,4 +77,8 @@ export const INIT_DIRS = [
   COSTS_DIR,
   TEMPLATES_DIR,
   CLAUDE_MD_TEMPLATES,
+  CERTS_DIR,
+  TRAEFIK_DIR,
+  TRAEFIK_DYNAMIC_DIR,
+  TRAEFIK_CERTS_DIR,
 ];

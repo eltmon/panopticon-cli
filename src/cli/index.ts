@@ -78,18 +78,59 @@ program
 // Dashboard commands
 program
   .command('up')
-  .description('Start dashboard')
+  .description('Start dashboard (and Traefik if enabled)')
   .option('--detach', 'Run in background')
+  .option('--skip-traefik', 'Skip Traefik startup')
   .action(async (options) => {
     const { spawn, execSync } = await import('child_process');
     const { join, dirname } = await import('path');
     const { fileURLToPath } = await import('url');
+    const { readFileSync, existsSync } = await import('fs');
+    const { parse } = await import('@iarna/toml');
 
     // Find dashboard directory relative to CLI
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const dashboardDir = join(__dirname, '..', 'dashboard');
 
-    console.log(chalk.bold('Starting Panopticon dashboard...\n'));
+    // Check if Traefik is enabled
+    const configFile = join(process.env.HOME || '', '.panopticon', 'config.toml');
+    let traefikEnabled = false;
+    let traefikDomain = 'pan.localhost';
+
+    if (existsSync(configFile)) {
+      try {
+        const configContent = readFileSync(configFile, 'utf-8');
+        const config = parse(configContent) as any;
+        traefikEnabled = config.traefik?.enabled === true;
+        traefikDomain = config.traefik?.domain || 'pan.localhost';
+      } catch (error) {
+        console.log(chalk.yellow('Warning: Could not read config.toml'));
+      }
+    }
+
+    console.log(chalk.bold('Starting Panopticon...\n'));
+
+    // Start Traefik if enabled
+    if (traefikEnabled && !options.skipTraefik) {
+      const traefikDir = join(process.env.HOME || '', '.panopticon', 'traefik');
+      if (existsSync(traefikDir)) {
+        try {
+          console.log(chalk.dim('Starting Traefik...'));
+          execSync('docker-compose up -d', {
+            cwd: traefikDir,
+            stdio: 'pipe',
+          });
+          console.log(chalk.green('✓ Traefik started'));
+          console.log(chalk.dim(`  Dashboard: https://traefik.${traefikDomain}:8080\n`));
+        } catch (error) {
+          console.log(chalk.yellow('⚠ Failed to start Traefik (continuing anyway)'));
+          console.log(chalk.dim('  Run with --skip-traefik to suppress this message\n'));
+        }
+      }
+    }
+
+    // Start dashboard
+    console.log(chalk.dim('Starting dashboard...'));
 
     if (options.detach) {
       // Run in background
@@ -99,13 +140,23 @@ program
         stdio: 'ignore',
       });
       child.unref();
-      console.log(chalk.green('Dashboard started in background'));
-      console.log(`Frontend: ${chalk.cyan('http://localhost:3001')}`);
-      console.log(`API:      ${chalk.cyan('http://localhost:3002')}`);
+      console.log(chalk.green('✓ Dashboard started in background'));
+      if (traefikEnabled) {
+        console.log(`  Frontend: ${chalk.cyan(`https://${traefikDomain}`)}`);
+        console.log(`  API:      ${chalk.cyan(`https://${traefikDomain}/api`)}`);
+      } else {
+        console.log(`  Frontend: ${chalk.cyan('http://localhost:3001')}`);
+        console.log(`  API:      ${chalk.cyan('http://localhost:3002')}`);
+      }
     } else {
       // Run in foreground
-      console.log(`Frontend: ${chalk.cyan('http://localhost:3001')}`);
-      console.log(`API:      ${chalk.cyan('http://localhost:3002')}`);
+      if (traefikEnabled) {
+        console.log(`  Frontend: ${chalk.cyan(`https://${traefikDomain}`)}`);
+        console.log(`  API:      ${chalk.cyan(`https://${traefikDomain}/api`)}`);
+      } else {
+        console.log(`  Frontend: ${chalk.cyan('http://localhost:3001')}`);
+        console.log(`  API:      ${chalk.cyan('http://localhost:3002')}`);
+      }
       console.log(chalk.dim('\nPress Ctrl+C to stop\n'));
 
       const child = spawn('npm', ['run', 'dev'], {
@@ -122,17 +173,59 @@ program
 
 program
   .command('down')
-  .description('Stop dashboard')
-  .action(async () => {
+  .description('Stop dashboard (and Traefik if enabled)')
+  .option('--skip-traefik', 'Skip Traefik shutdown')
+  .action(async (options) => {
     const { execSync } = await import('child_process');
+    const { join } = await import('path');
+    const { readFileSync, existsSync } = await import('fs');
+    const { parse } = await import('@iarna/toml');
+
+    console.log(chalk.bold('Stopping Panopticon...\n'));
+
+    // Stop dashboard
+    console.log(chalk.dim('Stopping dashboard...'));
     try {
       // Kill processes on dashboard ports
       execSync('lsof -ti:3001 | xargs kill -9 2>/dev/null || true', { stdio: 'pipe' });
       execSync('lsof -ti:3002 | xargs kill -9 2>/dev/null || true', { stdio: 'pipe' });
-      console.log(chalk.green('Dashboard stopped'));
+      console.log(chalk.green('✓ Dashboard stopped'));
     } catch {
-      console.log(chalk.dim('No dashboard processes found'));
+      console.log(chalk.dim('  No dashboard processes found'));
     }
+
+    // Check if Traefik is enabled
+    const configFile = join(process.env.HOME || '', '.panopticon', 'config.toml');
+    let traefikEnabled = false;
+
+    if (existsSync(configFile)) {
+      try {
+        const configContent = readFileSync(configFile, 'utf-8');
+        const config = parse(configContent) as any;
+        traefikEnabled = config.traefik?.enabled === true;
+      } catch (error) {
+        // Ignore config read errors
+      }
+    }
+
+    // Stop Traefik if enabled
+    if (traefikEnabled && !options.skipTraefik) {
+      const traefikDir = join(process.env.HOME || '', '.panopticon', 'traefik');
+      if (existsSync(traefikDir)) {
+        console.log(chalk.dim('Stopping Traefik...'));
+        try {
+          execSync('docker-compose down', {
+            cwd: traefikDir,
+            stdio: 'pipe',
+          });
+          console.log(chalk.green('✓ Traefik stopped'));
+        } catch (error) {
+          console.log(chalk.yellow('⚠ Failed to stop Traefik'));
+        }
+      }
+    }
+
+    console.log('');
   });
 
 // Project management commands

@@ -2,10 +2,18 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
-import { PANOPTICON_HOME, INIT_DIRS } from '../../lib/paths.js';
+import {
+  PANOPTICON_HOME,
+  INIT_DIRS,
+  CERTS_DIR,
+  TRAEFIK_DIR,
+  TRAEFIK_DYNAMIC_DIR,
+  TRAEFIK_CERTS_DIR,
+  SOURCE_TRAEFIK_TEMPLATES
+} from '../../lib/paths.js';
 
 export function registerInstallCommand(program: Command): void {
   program
@@ -45,6 +53,30 @@ function detectPlatform(): 'linux' | 'darwin' | 'win32' | 'wsl' {
     return 'linux';
   }
   return os as 'darwin' | 'win32';
+}
+
+/**
+ * Recursively copy directory contents
+ */
+function copyDirectoryRecursive(source: string, dest: string): void {
+  if (!existsSync(source)) {
+    throw new Error(`Source directory not found: ${source}`);
+  }
+
+  mkdirSync(dest, { recursive: true });
+
+  const entries = readdirSync(source);
+  for (const entry of entries) {
+    const sourcePath = join(source, entry);
+    const destPath = join(dest, entry);
+    const stat = statSync(sourcePath);
+
+    if (stat.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destPath);
+    } else {
+      copyFileSync(sourcePath, destPath);
+    }
+  }
 }
 
 function checkCommand(cmd: string): boolean {
@@ -188,16 +220,25 @@ async function installCommand(options: InstallOptions): Promise<void> {
       spinner.start('Setting up mkcert CA...');
       try {
         execSync('mkcert -install', { stdio: 'pipe' });
+        spinner.succeed('mkcert CA installed');
 
-        // Generate certs for localhost
-        const certsDir = join(PANOPTICON_HOME, 'certs');
-        mkdirSync(certsDir, { recursive: true });
+        // Generate wildcard certificates
+        spinner.start('Generating wildcard certificates...');
+        const traefikCertFile = join(TRAEFIK_CERTS_DIR, '_wildcard.pan.localhost.pem');
+        const traefikKeyFile = join(TRAEFIK_CERTS_DIR, '_wildcard.pan.localhost-key.pem');
 
         execSync(
-          `mkcert -cert-file "${join(certsDir, 'localhost.pem')}" -key-file "${join(certsDir, 'localhost-key.pem')}" localhost "*.localhost" 127.0.0.1 ::1`,
+          `mkcert -cert-file "${traefikCertFile}" -key-file "${traefikKeyFile}" "*.pan.localhost" "*.localhost" localhost 127.0.0.1 ::1`,
           { stdio: 'pipe' }
         );
-        spinner.succeed('mkcert certificates generated');
+
+        // Also copy to legacy certs directory for backwards compatibility
+        const legacyCertFile = join(CERTS_DIR, 'localhost.pem');
+        const legacyKeyFile = join(CERTS_DIR, 'localhost-key.pem');
+        copyFileSync(traefikCertFile, legacyCertFile);
+        copyFileSync(traefikKeyFile, legacyKeyFile);
+
+        spinner.succeed('Wildcard certificates generated (*.pan.localhost, *.localhost)');
       } catch (error) {
         spinner.warn('mkcert setup failed (HTTPS may not work)');
       }
@@ -206,10 +247,33 @@ async function installCommand(options: InstallOptions): Promise<void> {
     }
   }
 
-  // Step 5: Create config file if doesn't exist
+  // Step 5: Setup Traefik configuration
+  if (!options.minimal) {
+    spinner.start('Setting up Traefik configuration...');
+
+    try {
+      // Copy Traefik templates from package to ~/.panopticon/traefik/
+      // Only copy if files don't already exist
+      if (!existsSync(join(TRAEFIK_DIR, 'docker-compose.yml'))) {
+        copyDirectoryRecursive(SOURCE_TRAEFIK_TEMPLATES, TRAEFIK_DIR);
+        spinner.succeed('Traefik configuration created from templates');
+      } else {
+        spinner.info('Traefik configuration already exists (skipping)');
+      }
+    } catch (error) {
+      spinner.fail(`Failed to set up Traefik configuration: ${error}`);
+      console.log(chalk.yellow('You can set up Traefik manually later'));
+    }
+  }
+
+  // Step 6: Create config file if doesn't exist
   const configFile = join(PANOPTICON_HOME, 'config.toml');
   if (!existsSync(configFile)) {
     spinner.start('Creating default config...');
+    const traefikConfig = options.minimal ? 'enabled = false' : `enabled = true
+dashboard_port = 8080
+domain = "pan.localhost"`;
+
     writeFileSync(
       configFile,
       `# Panopticon configuration
@@ -220,6 +284,9 @@ default_runtime = "claude"
 [dashboard]
 port = 3001
 api_port = 3002
+
+[traefik]
+${traefikConfig}
 
 [sync]
 auto_sync = true
@@ -239,7 +306,16 @@ consecutive_failures = 3
   console.log('');
   console.log(chalk.bold('Next steps:'));
   console.log(`  1. Run ${chalk.cyan('pan sync')} to sync skills to ~/.claude/`);
-  console.log(`  2. Run ${chalk.cyan('pan up')} to start the dashboard`);
-  console.log(`  3. Create a workspace with ${chalk.cyan('pan workspace create <issue-id>')}`);
+
+  if (!options.minimal) {
+    console.log(`  2. Add to ${chalk.yellow('/etc/hosts')}: ${chalk.cyan('127.0.0.1 pan.localhost')}`);
+    console.log(`  3. Run ${chalk.cyan('pan up')} to start Traefik and dashboard`);
+    console.log(`  4. Access dashboard at ${chalk.cyan('https://pan.localhost')}`);
+  } else {
+    console.log(`  2. Run ${chalk.cyan('pan up')} to start the dashboard`);
+    console.log(`  3. Access dashboard at ${chalk.cyan('http://localhost:3001')}`);
+  }
+
+  console.log(`  ${!options.minimal ? '5' : '4'}. Create a workspace with ${chalk.cyan('pan workspace create <issue-id>')}`);
   console.log('');
 }

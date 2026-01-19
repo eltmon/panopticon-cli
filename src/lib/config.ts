@@ -48,6 +48,11 @@ export interface PanopticonConfig {
     port: number;
     api_port: number;
   };
+  traefik?: {
+    enabled: boolean;
+    dashboard_port?: number;
+    domain?: string;
+  };
 }
 
 const DEFAULT_CONFIG: PanopticonConfig = {

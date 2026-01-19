@@ -31,8 +31,8 @@ Panopticon is a unified orchestration layer for AI coding assistants. It works w
 # Install Panopticon
 npm install -g panopticon-cli
 
-# Initialize configuration
-pan init
+# Install prerequisites and setup (includes optional HTTPS/Traefik)
+pan install
 
 # Sync skills to all AI tools
 pan sync
@@ -41,12 +41,44 @@ pan sync
 pan doctor
 ```
 
+### HTTPS Setup (Optional)
+
+Panopticon supports local HTTPS via Traefik reverse proxy:
+
+```bash
+# Full install (includes Traefik + mkcert for HTTPS)
+pan install
+
+# Add to /etc/hosts (macOS/Linux)
+echo "127.0.0.1 pan.localhost" | sudo tee -a /etc/hosts
+
+# Start with HTTPS
+pan up
+# → Dashboard: https://pan.localhost
+# → Traefik UI: https://traefik.pan.localhost:8080
+```
+
+**Minimal install** (skip Traefik, use ports):
+```bash
+pan install --minimal
+pan up
+# → Dashboard: http://localhost:3001
+```
+
+See [docs/DNS_SETUP.md](docs/DNS_SETUP.md) for detailed DNS configuration (especially for WSL2).
+
 ## Requirements
 
+### Required
 - Node.js 18+
-- tmux (for agent sessions)
 - Git (for worktree-based workspaces)
-- Linear API key (for issue tracking)
+- Docker (for Traefik and workspace containers)
+- tmux (for agent sessions)
+
+### Optional
+- **mkcert** - For HTTPS certificates (recommended)
+- **Linear API key** - For issue tracking integration
+- **Beads CLI (bd)** - For persistent task tracking across sessions
 
 ## Configuration
 
@@ -275,6 +307,12 @@ Start the monitoring dashboard:
 pan up
 ```
 
+**With Traefik (HTTPS):**
+- Frontend: https://pan.localhost
+- API: https://pan.localhost/api
+- Traefik UI: https://traefik.pan.localhost:8080
+
+**Without Traefik (port-based):**
 - Frontend: http://localhost:3001
 - API: http://localhost:3002
 
