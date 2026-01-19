@@ -339,7 +339,7 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
 
       {/* Dialog */}
-      <div className="relative bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[85vh] overflow-hidden flex flex-col">
+      <div className="relative bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl mx-4 min-h-[70vh] max-h-[85vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
           <div className="flex items-center gap-3">

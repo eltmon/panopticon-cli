@@ -3112,7 +3112,14 @@ app.get('/api/planning/:issueId/status', (req, res) => {
                 } else if (json.type === 'content_block_delta' && json.delta?.text) {
                   textParts.push(json.delta.text);
                 } else if (json.type === 'result' && json.result) {
-                  textParts.push(`\n--- Result ---\n${json.result}\n`);
+                  // Format result - stringify if it's an object
+                  const resultText = typeof json.result === 'object'
+                    ? JSON.stringify(json.result, null, 2)
+                    : String(json.result);
+                  // Only show result if it's meaningful (not just empty or short status)
+                  if (resultText.length > 50 || resultText.includes('error')) {
+                    textParts.push(`\n\`\`\`\n${resultText}\n\`\`\`\n`);
+                  }
                 }
               } catch (e) {
                 // Skip unparseable lines
