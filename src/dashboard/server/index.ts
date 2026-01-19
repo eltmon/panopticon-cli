@@ -616,24 +616,145 @@ app.get('/api/activity/:id', (req, res) => {
   res.json(activity);
 });
 
+// Get container status for workspace
+function getContainerStatus(issueId: string): Record<string, { running: boolean; uptime: string | null }> {
+  const issueLower = issueId.toLowerCase();
+  const containerNames = ['frontend', 'api', 'postgres', 'redis'];
+  const status: Record<string, { running: boolean; uptime: string | null }> = {};
+
+  for (const name of containerNames) {
+    try {
+      // Try both naming conventions
+      const patterns = [
+        `myn-feature-${issueLower}-${name}-1`,
+        `feature-${issueLower}-${name}-1`,
+        `${issueLower}-${name}-1`,
+      ];
+
+      let found = false;
+      for (const containerName of patterns) {
+        const output = execSync(
+          `docker ps -a --filter "name=${containerName}" --format "{{.Status}}" 2>/dev/null || echo ""`,
+          { encoding: 'utf-8' }
+        ).trim();
+
+        if (output) {
+          const isRunning = output.startsWith('Up');
+          const uptime = isRunning ? output.replace(/^Up\s+/, '').split(/\s+/)[0] : null;
+          status[name] = { running: isRunning, uptime };
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        status[name] = { running: false, uptime: null };
+      }
+    } catch {
+      status[name] = { running: false, uptime: null };
+    }
+  }
+
+  return status;
+}
+
+// Get MR URL for an issue from GitLab
+function getMrUrl(issueId: string, workspacePath: string): string | null {
+  try {
+    // Try to get MR from glab
+    const output = execSync(`glab mr list -A -F json 2>/dev/null || echo "[]"`, {
+      encoding: 'utf-8',
+      cwd: workspacePath,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    const mrs = JSON.parse(output);
+    for (const mr of mrs) {
+      // Match by source branch (e.g., feature/min-609 -> MIN-609)
+      const branchMatch = mr.source_branch?.match(/feature\/(\w+-\d+)/i);
+      if (branchMatch && branchMatch[1].toUpperCase() === issueId.toUpperCase()) {
+        return mr.web_url;
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+// Get git status for sub-repos (frontend/api)
+function getRepoGitStatus(workspacePath: string): {
+  frontend: { branch: string; uncommittedFiles: number; latestCommit: string } | null;
+  api: { branch: string; uncommittedFiles: number; latestCommit: string } | null;
+} {
+  const result: {
+    frontend: { branch: string; uncommittedFiles: number; latestCommit: string } | null;
+    api: { branch: string; uncommittedFiles: number; latestCommit: string } | null;
+  } = { frontend: null, api: null };
+
+  // Check for both 'fe'/'api' and 'frontend'/'backend' naming conventions
+  const repoPaths = [
+    { key: 'frontend', paths: ['fe', 'frontend'] },
+    { key: 'api', paths: ['api', 'backend'] },
+  ];
+
+  for (const { key, paths } of repoPaths) {
+    for (const subdir of paths) {
+      const repoDir = join(workspacePath, subdir);
+      if (!existsSync(repoDir)) continue;
+
+      try {
+        const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
+          cwd: repoDir,
+          encoding: 'utf-8',
+        }).trim();
+
+        const uncommitted = execSync('git status --porcelain 2>/dev/null | wc -l', {
+          cwd: repoDir,
+          encoding: 'utf-8',
+        }).trim();
+
+        const latestCommit = execSync('git log -1 --pretty=format:"%s" 2>/dev/null || echo ""', {
+          cwd: repoDir,
+          encoding: 'utf-8',
+        }).trim();
+
+        result[key as 'frontend' | 'api'] = {
+          branch,
+          uncommittedFiles: parseInt(uncommitted, 10) || 0,
+          latestCommit: latestCommit.slice(0, 60) + (latestCommit.length > 60 ? '...' : ''),
+        };
+        break; // Found this repo, move to next
+      } catch {}
+    }
+  }
+
+  return result;
+}
+
 // Get workspace info for an issue
 app.get('/api/workspaces/:issueId', (req, res) => {
   const { issueId } = req.params;
   const issuePrefix = issueId.split('-')[0];
   const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
 
   // Convert issue ID to workspace path (e.g., MIN-645 -> feature-min-645)
-  const workspaceName = `feature-${issueId.toLowerCase()}`;
+  const workspaceName = `feature-${issueLower}`;
   const workspacePath = join(projectPath, 'workspaces', workspaceName);
 
   if (!existsSync(workspacePath)) {
     return res.json({ exists: false, issueId });
   }
 
-  // Get git status
+  // Get git status for main workspace and sub-repos
   const git = getGitStatus(workspacePath);
+  const repoGit = getRepoGitStatus(workspacePath);
 
-  // Check for WORKSPACE.md or docker-compose.yml to get service info
+  // Construct service URLs based on workspace naming convention
+  const frontendUrl = `https://feature-${issueLower}.myn.test`;
+  const apiUrl = `https://api-feature-${issueLower}.myn.test`;
+
+  // Check for WORKSPACE.md to get custom service URLs
   let services: { name: string; url?: string }[] = [];
   const workspaceMd = join(workspacePath, 'WORKSPACE.md');
   const dockerCompose = join(workspacePath, 'docker-compose.yml');
@@ -650,15 +771,61 @@ app.get('/api/workspaces/:issueId', (req, res) => {
     } catch {}
   }
 
+  // If no services from WORKSPACE.md, use constructed URLs
+  if (services.length === 0) {
+    services = [
+      { name: 'Frontend', url: frontendUrl },
+      { name: 'API', url: apiUrl },
+    ];
+  }
+
   // Check if docker-compose exists (indicates containerized workspace)
   const hasDocker = existsSync(dockerCompose);
+
+  // Get container status
+  const containers = hasDocker ? getContainerStatus(issueId) : null;
+
+  // Get MR URL
+  const mrUrl = getMrUrl(issueId, workspacePath);
+
+  // Check for running agent
+  let hasAgent = false;
+  let agentSessionId: string | null = null;
+  let agentModel: string | undefined;
+
+  try {
+    const sessions = execSync('tmux list-sessions 2>/dev/null || echo ""', { encoding: 'utf-8' });
+    const agentSession = `agent-${issueLower}`;
+    if (sessions.includes(agentSession)) {
+      hasAgent = true;
+      agentSessionId = agentSession;
+
+      // Try to detect model from tmux output
+      try {
+        const paneOutput = execSync(
+          `tmux capture-pane -t "${agentSession}" -p 2>/dev/null | tail -50`,
+          { encoding: 'utf-8' }
+        );
+        const modelMatch = paneOutput.match(/\[(Opus|Sonnet|Haiku)[^\]]*\]/i);
+        agentModel = modelMatch ? modelMatch[1] : undefined;
+      } catch {}
+    }
+  } catch {}
 
   res.json({
     exists: true,
     issueId,
     path: workspacePath,
+    frontendUrl,
+    apiUrl,
+    mrUrl,
+    hasAgent,
+    agentSessionId,
+    agentModel,
     git,
+    repoGit,
     services,
+    containers,
     hasDocker,
   });
 });

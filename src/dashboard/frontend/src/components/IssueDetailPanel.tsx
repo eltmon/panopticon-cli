@@ -16,15 +16,38 @@ import {
   GitBranch,
   Globe,
   Terminal,
+  Box,
+  Database,
+  Server,
+  GitMerge,
+  Bot,
 } from 'lucide-react';
 import { Issue, GitStatus } from '../types';
+
+interface ContainerStatus {
+  running: boolean;
+  uptime: string | null;
+}
+
+interface RepoGitStatus {
+  frontend: GitStatus | null;
+  api: GitStatus | null;
+}
 
 interface WorkspaceInfo {
   exists: boolean;
   issueId: string;
   path?: string;
+  frontendUrl?: string;
+  apiUrl?: string;
+  mrUrl?: string | null;
+  hasAgent?: boolean;
+  agentSessionId?: string | null;
+  agentModel?: string;
   git?: GitStatus;
+  repoGit?: RepoGitStatus;
   services?: { name: string; url?: string }[];
+  containers?: Record<string, ContainerStatus> | null;
   hasDocker?: boolean;
 }
 
@@ -239,7 +262,15 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                 <Folder className="w-4 h-4 text-green-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <h4 className="text-sm font-medium text-green-400">Workspace Ready</h4>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-medium text-green-400">Workspace Ready</h4>
+                  {workspace.hasAgent && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 bg-blue-900/50 text-blue-400 text-xs rounded">
+                      <Bot className="w-3 h-3" />
+                      {workspace.agentModel || 'Agent'}
+                    </span>
+                  )}
+                </div>
 
                 {/* Path with copy button */}
                 <div className="flex items-center gap-2 mt-2">
@@ -255,9 +286,111 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                   </button>
                 </div>
 
-                {/* Git status */}
-                {workspace.git && (
-                  <div className="flex items-center gap-3 mt-2 text-xs">
+                {/* Service URLs */}
+                <div className="mt-3 space-y-1">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider">Services</p>
+                  {workspace.frontendUrl && (
+                    <a
+                      href={workspace.frontendUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+                    >
+                      <Globe className="w-3 h-3" />
+                      Frontend: {workspace.frontendUrl}
+                    </a>
+                  )}
+                  {workspace.apiUrl && (
+                    <a
+                      href={workspace.apiUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+                    >
+                      <Server className="w-3 h-3" />
+                      API: {workspace.apiUrl}
+                    </a>
+                  )}
+                  {workspace.mrUrl && (
+                    <a
+                      href={workspace.mrUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-purple-400 hover:text-purple-300"
+                    >
+                      <GitMerge className="w-3 h-3" />
+                      Merge Request
+                    </a>
+                  )}
+                </div>
+
+                {/* Container status */}
+                {workspace.containers && (
+                  <div className="mt-3">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Containers</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(workspace.containers).map(([name, status]) => (
+                        <span
+                          key={name}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                            status.running
+                              ? 'bg-green-900/30 text-green-400'
+                              : 'bg-gray-700 text-gray-500'
+                          }`}
+                        >
+                          {name === 'postgres' || name === 'redis' ? (
+                            <Database className="w-3 h-3" />
+                          ) : (
+                            <Box className="w-3 h-3" />
+                          )}
+                          {name}
+                          {status.running && status.uptime && (
+                            <span className="text-gray-400 ml-1">{status.uptime}</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Git status for sub-repos */}
+                {workspace.repoGit && (workspace.repoGit.frontend || workspace.repoGit.api) && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-gray-500 uppercase tracking-wider">Git Status</p>
+                    {workspace.repoGit.frontend && (
+                      <div className="text-xs">
+                        <span className="text-gray-400">Frontend:</span>
+                        <span className="flex items-center gap-2 mt-0.5">
+                          <GitBranch className="w-3 h-3 text-gray-500" />
+                          <span className="text-gray-300">{workspace.repoGit.frontend.branch}</span>
+                          {workspace.repoGit.frontend.uncommittedFiles > 0 && (
+                            <span className="text-yellow-400">
+                              {workspace.repoGit.frontend.uncommittedFiles} uncommitted
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    {workspace.repoGit.api && (
+                      <div className="text-xs">
+                        <span className="text-gray-400">API:</span>
+                        <span className="flex items-center gap-2 mt-0.5">
+                          <GitBranch className="w-3 h-3 text-gray-500" />
+                          <span className="text-gray-300">{workspace.repoGit.api.branch}</span>
+                          {workspace.repoGit.api.uncommittedFiles > 0 && (
+                            <span className="text-yellow-400">
+                              {workspace.repoGit.api.uncommittedFiles} uncommitted
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Fallback to main git status if no sub-repos */}
+                {workspace.git && !workspace.repoGit?.frontend && !workspace.repoGit?.api && (
+                  <div className="flex items-center gap-3 mt-3 text-xs">
                     <span className="flex items-center gap-1 text-gray-400">
                       <GitBranch className="w-3 h-3" />
                       {workspace.git.branch}
@@ -267,25 +400,6 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                         {workspace.git.uncommittedFiles} uncommitted
                       </span>
                     )}
-                  </div>
-                )}
-
-                {/* Service URLs */}
-                {workspace.services && workspace.services.length > 0 && (
-                  <div className="mt-3 space-y-1">
-                    <p className="text-xs text-gray-500 uppercase tracking-wider">Services</p>
-                    {workspace.services.map((service, i) => (
-                      <a
-                        key={i}
-                        href={service.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
-                      >
-                        <Globe className="w-3 h-3" />
-                        {service.name}: {service.url}
-                      </a>
-                    ))}
                   </div>
                 )}
               </div>
