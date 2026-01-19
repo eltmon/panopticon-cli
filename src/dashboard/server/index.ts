@@ -45,22 +45,37 @@ function appendActivityOutput(id: string, line: string) {
   }
 }
 
+// Get the first registered project path from pan
+function getDefaultProjectPath(): string {
+  try {
+    const projectsFile = join(homedir(), '.panopticon', 'projects.json');
+    if (existsSync(projectsFile)) {
+      const projects = JSON.parse(readFileSync(projectsFile, 'utf-8'));
+      if (Array.isArray(projects) && projects.length > 0) {
+        return projects[0].path;
+      }
+    }
+  } catch {}
+  return homedir();
+}
+
 // Spawn a pan command and track its output
-function spawnPanCommand(args: string[], description: string): string {
+function spawnPanCommand(args: string[], description: string, cwd?: string): string {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const timestamp = new Date().toISOString();
   const command = `pan ${args.join(' ')}`;
+  const workingDir = cwd || homedir();
 
   logActivity({
     id,
     timestamp,
     command,
     status: 'running',
-    output: [`[${timestamp}] Starting: ${command}`],
+    output: [`[${timestamp}] Starting: ${command}`, `[cwd] ${workingDir}`],
   });
 
   const child = spawn('pan', args, {
-    cwd: homedir(),
+    cwd: workingDir,
     env: { ...process.env, FORCE_COLOR: '0' },
   });
 
@@ -497,15 +512,18 @@ app.post('/api/workspaces', (req, res) => {
   }
 
   try {
+    const projectPath = getDefaultProjectPath();
     const activityId = spawnPanCommand(
       ['workspace', 'create', issueId],
-      `Create workspace for ${issueId}`
+      `Create workspace for ${issueId}`,
+      projectPath
     );
 
     res.json({
       success: true,
       message: `Creating workspace for ${issueId}`,
       activityId,
+      projectPath,
     });
   } catch (error: any) {
     console.error('Error creating workspace:', error);
@@ -522,15 +540,18 @@ app.post('/api/agents', (req, res) => {
   }
 
   try {
+    const projectPath = getDefaultProjectPath();
     const activityId = spawnPanCommand(
       ['work', 'issue', issueId],
-      `Start agent for ${issueId}`
+      `Start agent for ${issueId}`,
+      projectPath
     );
 
     res.json({
       success: true,
       message: `Starting agent for ${issueId}`,
       activityId,
+      projectPath,
     });
   } catch (error: any) {
     console.error('Error starting agent:', error);
