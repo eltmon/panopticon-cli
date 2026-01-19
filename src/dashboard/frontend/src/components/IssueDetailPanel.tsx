@@ -262,8 +262,18 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                 <Folder className="w-4 h-4 text-green-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h4 className="text-sm font-medium text-green-400">Workspace Ready</h4>
+                  {!workspace.hasDocker && (
+                    <span className="px-2 py-0.5 bg-gray-700 text-gray-400 text-xs rounded">
+                      Git only
+                    </span>
+                  )}
+                  {workspace.hasDocker && (
+                    <span className="px-2 py-0.5 bg-purple-900/50 text-purple-400 text-xs rounded">
+                      Containerized
+                    </span>
+                  )}
                   {workspace.hasAgent && (
                     <span className="flex items-center gap-1 px-2 py-0.5 bg-blue-900/50 text-blue-400 text-xs rounded">
                       <Bot className="w-3 h-3" />
@@ -334,6 +344,13 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                 {workspace.hasDocker && (!workspace.containers || !Object.values(workspace.containers).some(c => c.running)) && (
                   <div className="mt-3 text-xs text-gray-500">
                     <span className="text-yellow-500">Containers not running.</span> Start with: <code className="bg-gray-800 px-1 rounded">docker compose up -d</code>
+                  </div>
+                )}
+
+                {/* Git-only workspace info */}
+                {!workspace.hasDocker && (
+                  <div className="mt-3 text-xs text-gray-500">
+                    This is a git-only workspace (no containers). For containerized dev, run <code className="bg-gray-800 px-1 rounded">./new-feature</code> from infra.
                   </div>
                 )}
 
