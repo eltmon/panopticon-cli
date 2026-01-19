@@ -21,6 +21,8 @@ import {
   Server,
   GitMerge,
   Bot,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { Issue, GitStatus } from '../types';
 
@@ -36,6 +38,8 @@ interface RepoGitStatus {
 
 interface WorkspaceInfo {
   exists: boolean;
+  corrupted?: boolean;
+  message?: string;
   issueId: string;
   path?: string;
   frontendUrl?: string;
@@ -86,10 +90,32 @@ function copyToClipboard(text: string): boolean {
   }
 }
 
+interface DiffAnalysis {
+  modifiedFiles: string[];
+  newFiles: string[];
+  unchangedFiles: string[];
+  comparedAgainst: string;
+  error?: string;
+}
+
+interface CleanPreview {
+  workspacePath: string;
+  totalSize: string;
+  fileCount: number;
+  codeFiles: string[];
+  configFiles: string[];
+  otherFiles: string[];
+  hasMore: boolean;
+  backupPath: string;
+  diffAnalysis?: DiffAnalysis;
+}
+
 export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPanelProps) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [copiedPath, setCopiedPath] = useState(false);
+  const [showCleanDialog, setShowCleanDialog] = useState(false);
+  const [createBackup, setCreateBackup] = useState(true);
 
   // Fetch workspace info
   const { data: workspace, isLoading: workspaceLoading } = useQuery<WorkspaceInfo>({
@@ -191,6 +217,39 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
     },
   });
 
+  // Fetch clean preview when dialog is shown
+  const { data: cleanPreview, isLoading: cleanPreviewLoading } = useQuery<CleanPreview>({
+    queryKey: ['workspace-clean-preview', issue.identifier],
+    queryFn: async () => {
+      const res = await fetch(`/api/workspaces/${issue.identifier}/clean/preview`);
+      if (!res.ok) throw new Error('Failed to fetch preview');
+      return res.json();
+    },
+    enabled: showCleanDialog && workspace?.corrupted === true,
+  });
+
+  const cleanWorkspaceMutation = useMutation({
+    mutationFn: async (options: { createBackup: boolean }) => {
+      const res = await fetch(`/api/workspaces/${issue.identifier}/clean`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ createBackup: options.createBackup }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to clean workspace');
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setShowCleanDialog(false);
+      queryClient.invalidateQueries({ queryKey: ['workspace', issue.identifier] });
+      if (data.backupPath) {
+        alert(`Workspace backed up to:\n${data.backupPath}\n\nYou can restore files from there after the new workspace is created.`);
+      }
+    },
+  });
+
   const handleStartAgent = () => {
     startAgentMutation.mutate();
   };
@@ -205,6 +264,14 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
 
   const handleStartContainers = () => {
     startContainersMutation.mutate();
+  };
+
+  const handleCleanWorkspace = () => {
+    setShowCleanDialog(true);
+  };
+
+  const handleConfirmClean = () => {
+    cleanWorkspaceMutation.mutate({ createBackup });
   };
 
   const priorityLabels: Record<number, { label: string; color: string }> = {
@@ -322,8 +389,57 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
           </div>
         )}
 
-        {/* Workspace Info - Show when workspace exists */}
-        {!workspaceLoading && workspace?.exists && (
+        {/* Corrupted Workspace Warning */}
+        {!workspaceLoading && workspace?.exists && workspace?.corrupted && (
+          <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-yellow-900/50 rounded-full flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-4 h-4 text-yellow-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-sm font-medium text-yellow-400">Workspace Corrupted</h4>
+                <p className="text-sm text-gray-400 mt-1">
+                  {workspace.message || 'The workspace exists but is not a valid git worktree.'}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Path: <code className="bg-gray-800 px-1 rounded">{workspace.path}</code>
+                </p>
+                <button
+                  onClick={handleCleanWorkspace}
+                  disabled={cleanWorkspaceMutation.isPending}
+                  className="mt-3 flex items-center gap-2 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 disabled:bg-yellow-800 text-white text-sm rounded transition-colors"
+                >
+                  {cleanWorkspaceMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Cleaning...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      Clean &amp; Recreate
+                    </>
+                  )}
+                </button>
+                {cleanWorkspaceMutation.isError && (
+                  <div className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded mt-2">
+                    {cleanWorkspaceMutation.error instanceof Error
+                      ? cleanWorkspaceMutation.error.message
+                      : 'Failed to clean workspace'}
+                  </div>
+                )}
+                {cleanWorkspaceMutation.isSuccess && (
+                  <div className="text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded mt-2">
+                    Workspace cleaned! Recreating...
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Workspace Info - Show when workspace exists and is not corrupted */}
+        {!workspaceLoading && workspace?.exists && !workspace?.corrupted && (
           <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 bg-green-900/50 rounded-full flex items-center justify-center shrink-0">
@@ -675,6 +791,208 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
         </div>
         )}
       </div>
+
+      {/* Clean Workspace Dialog */}
+      {showCleanDialog && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
+              <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-yellow-500" />
+                Clean Corrupted Workspace
+              </h3>
+              <button
+                onClick={() => setShowCleanDialog(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1">
+              {cleanPreviewLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                  <span className="ml-2 text-gray-400">Scanning workspace...</span>
+                </div>
+              ) : cleanPreview ? (
+                <div className="space-y-4">
+                  {/* Diff Analysis - Most Important Info */}
+                  {cleanPreview.diffAnalysis && !cleanPreview.diffAnalysis.error && (
+                    <div className="space-y-3">
+                      <p className="text-xs text-gray-500">
+                        Compared against: <code className="bg-gray-900 px-1 rounded">{cleanPreview.diffAnalysis.comparedAgainst}</code>
+                      </p>
+
+                      {/* Modified files - these are the ones you'd lose */}
+                      {cleanPreview.diffAnalysis.modifiedFiles.length > 0 && (
+                        <div className="bg-red-900/30 border border-red-700/50 rounded p-3">
+                          <h4 className="text-sm font-medium text-red-400 flex items-center gap-2">
+                            <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                            {cleanPreview.diffAnalysis.modifiedFiles.length} Modified Files (WILL BE LOST)
+                          </h4>
+                          <p className="text-xs text-gray-400 mt-1 mb-2">
+                            These files have changes that differ from <code>{cleanPreview.diffAnalysis.comparedAgainst}</code>
+                          </p>
+                          <div className="bg-gray-900 rounded p-2 max-h-32 overflow-y-auto">
+                            <ul className="text-xs text-red-300 font-mono space-y-0.5">
+                              {cleanPreview.diffAnalysis.modifiedFiles.slice(0, 20).map((f, i) => (
+                                <li key={i} className="truncate">• {f}</li>
+                              ))}
+                              {cleanPreview.diffAnalysis.modifiedFiles.length > 20 && (
+                                <li className="text-gray-500">...and {cleanPreview.diffAnalysis.modifiedFiles.length - 20} more</li>
+                              )}
+                            </ul>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* New files - also would be lost */}
+                      {cleanPreview.diffAnalysis.newFiles.length > 0 && (
+                        <div className="bg-orange-900/30 border border-orange-700/50 rounded p-3">
+                          <h4 className="text-sm font-medium text-orange-400 flex items-center gap-2">
+                            <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
+                            {cleanPreview.diffAnalysis.newFiles.length} New Files (WILL BE LOST)
+                          </h4>
+                          <p className="text-xs text-gray-400 mt-1 mb-2">
+                            These files don't exist in <code>{cleanPreview.diffAnalysis.comparedAgainst}</code>
+                          </p>
+                          <div className="bg-gray-900 rounded p-2 max-h-24 overflow-y-auto">
+                            <ul className="text-xs text-orange-300 font-mono space-y-0.5">
+                              {cleanPreview.diffAnalysis.newFiles.slice(0, 15).map((f, i) => (
+                                <li key={i} className="truncate">+ {f}</li>
+                              ))}
+                              {cleanPreview.diffAnalysis.newFiles.length > 15 && (
+                                <li className="text-gray-500">...and {cleanPreview.diffAnalysis.newFiles.length - 15} more</li>
+                              )}
+                            </ul>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Unchanged files - safe */}
+                      {cleanPreview.diffAnalysis.unchangedFiles.length > 0 && (
+                        <div className="bg-green-900/30 border border-green-700/50 rounded p-3">
+                          <h4 className="text-sm font-medium text-green-400 flex items-center gap-2">
+                            <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                            {cleanPreview.diffAnalysis.unchangedFiles.length} Unchanged Files (safe to delete)
+                          </h4>
+                          <p className="text-xs text-gray-400 mt-1">
+                            These files are identical to <code>{cleanPreview.diffAnalysis.comparedAgainst}</code> and will be recreated.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Summary */}
+                      {cleanPreview.diffAnalysis.modifiedFiles.length === 0 && cleanPreview.diffAnalysis.newFiles.length === 0 && (
+                        <div className="bg-green-900/30 border border-green-700/50 rounded p-3">
+                          <p className="text-green-400 text-sm font-medium">✓ No unique changes detected</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            All analyzed files match <code>{cleanPreview.diffAnalysis.comparedAgainst}</code>. Safe to clean without backup.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Diff error */}
+                  {cleanPreview.diffAnalysis?.error && (
+                    <div className="bg-yellow-900/30 border border-yellow-700/50 rounded p-3">
+                      <p className="text-yellow-400 text-sm font-medium">⚠️ Could not analyze changes</p>
+                      <p className="text-xs text-gray-400 mt-1">{cleanPreview.diffAnalysis.error}</p>
+                      <p className="text-xs text-gray-500 mt-1">Recommend creating a backup to be safe.</p>
+                    </div>
+                  )}
+
+                  {/* Workspace stats */}
+                  <div className="bg-gray-900/50 border border-gray-700 rounded p-3">
+                    <p className="text-gray-400 text-xs">
+                      <strong>Path:</strong> <code className="bg-gray-800 px-1 rounded">{cleanPreview.workspacePath}</code>
+                    </p>
+                    <p className="text-gray-400 text-xs mt-1">
+                      <strong>Size:</strong> {cleanPreview.totalSize} • {cleanPreview.fileCount} files analyzed
+                    </p>
+                  </div>
+
+                  {/* Backup option */}
+                  <div className="border-t border-gray-700 pt-4">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={createBackup}
+                        onChange={(e) => setCreateBackup(e.target.checked)}
+                        className="mt-1 w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
+                      />
+                      <div>
+                        <span className="text-white text-sm font-medium">Create backup before cleaning</span>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          Files will be copied to: <code className="bg-gray-900 px-1 rounded">.backup-feature-{issue.identifier.toLowerCase()}-*</code>
+                        </p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          You can manually restore files from the backup after the new workspace is created.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Info about corrupted workspaces */}
+                  <details className="group">
+                    <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-400">
+                      What causes corrupted workspaces?
+                    </summary>
+                    <div className="mt-2 bg-blue-900/30 border border-blue-700/50 rounded p-3">
+                      <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
+                        <li>Interrupted <code>pan workspace create</code> command</li>
+                        <li>Manual deletion of the <code>.git</code> file</li>
+                        <li>Disk space issues during workspace creation</li>
+                        <li>Git worktree pruning from the main repository</li>
+                      </ul>
+                    </div>
+                  </details>
+                </div>
+              ) : (
+                <p className="text-gray-400">Failed to load preview</p>
+              )}
+            </div>
+
+            <div className="px-4 py-3 border-t border-gray-700 flex justify-end gap-3">
+              <button
+                onClick={() => setShowCleanDialog(false)}
+                className="px-4 py-2 text-gray-400 hover:text-white text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmClean}
+                disabled={cleanWorkspaceMutation.isPending || cleanPreviewLoading}
+                className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 disabled:bg-yellow-800 text-white text-sm rounded flex items-center gap-2"
+              >
+                {cleanWorkspaceMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {createBackup ? 'Backing up & Cleaning...' : 'Cleaning...'}
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    {createBackup ? 'Backup & Recreate' : 'Delete & Recreate'}
+                  </>
+                )}
+              </button>
+            </div>
+
+            {cleanWorkspaceMutation.isError && (
+              <div className="px-4 py-2 bg-red-900/30 border-t border-red-700">
+                <p className="text-red-400 text-sm">
+                  {cleanWorkspaceMutation.error instanceof Error
+                    ? cleanWorkspaceMutation.error.message
+                    : 'Failed to clean workspace'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

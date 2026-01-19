@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, lstatSync, readlinkSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, lstatSync, readlinkSync, rmSync } from 'fs';
 import { join, basename } from 'path';
 import { SKILLS_DIR, COMMANDS_DIR, SYNC_TARGETS, type Runtime } from './paths.js';
 
@@ -13,6 +13,20 @@ export interface SyncPlan {
   runtime: Runtime;
   skills: SyncItem[];
   commands: SyncItem[];
+}
+
+/**
+ * Remove a file, symlink, or directory safely
+ */
+function removeTarget(targetPath: string): void {
+  const stats = lstatSync(targetPath);
+  if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    // It's a real directory, remove recursively
+    rmSync(targetPath, { recursive: true, force: true });
+  } else {
+    // It's a file or symlink
+    unlinkSync(targetPath);
+  }
 }
 
 /**
@@ -139,7 +153,7 @@ export function executeSync(runtime: Runtime, options: SyncOptions = {}): SyncRe
 
     // Remove existing if force or if it's our symlink
     if (existsSync(item.targetPath)) {
-      unlinkSync(item.targetPath);
+      removeTarget(item.targetPath);
     }
 
     // Create symlink
@@ -164,7 +178,7 @@ export function executeSync(runtime: Runtime, options: SyncOptions = {}): SyncRe
     }
 
     if (existsSync(item.targetPath)) {
-      unlinkSync(item.targetPath);
+      removeTarget(item.targetPath);
     }
 
     symlinkSync(item.sourcePath, item.targetPath);

@@ -22,10 +22,6 @@ entryPoints:
     http:
       tls: {}
 
-# Certificate Resolvers
-# Using file provider for mkcert certificates
-certificatesResolvers: {}
-
 # Providers
 providers:
   # File provider for dynamic configuration

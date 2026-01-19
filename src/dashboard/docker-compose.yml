@@ -1,0 +1,28 @@
+services:
+  dashboard:
+    build: .
+    container_name: panopticon-dashboard
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - LINEAR_API_KEY=${LINEAR_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+    volumes:
+      # Mount host paths for workspace/agent management
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${HOME}/.panopticon:/root/.panopticon:ro
+      - ${HOME}/projects:/root/projects
+    networks:
+      - panopticon
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.panopticon.rule=Host(`pan.localhost`)"
+      - "traefik.http.routers.panopticon.entrypoints=websecure"
+      - "traefik.http.routers.panopticon.tls=true"
+      - "traefik.http.services.panopticon.loadbalancer.server.port=3000"
+
+networks:
+  panopticon:
+    name: panopticon
+    external: true

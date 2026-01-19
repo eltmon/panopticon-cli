@@ -187,7 +187,15 @@ function getGitHubLocalPaths(): Record<string, string> {
 
 // Map GitHub issue state + labels to canonical state
 function mapGitHubStateToCanonical(state: string, labels: string[]): string {
-  // Check for explicit state labels first
+  // Handle both API lowercase and gh CLI uppercase
+  const stateLower = state.toLowerCase();
+
+  // Closed issues are always done (regardless of labels)
+  if (stateLower === 'closed') {
+    return 'done';
+  }
+
+  // For open issues, check labels for workflow state
   const labelNames = labels.map(l => l.toLowerCase());
 
   if (labelNames.some(l => l.includes('planning') || l.includes('discovery'))) {
@@ -209,17 +217,11 @@ function mapGitHubStateToCanonical(state: string, labels: string[]): string {
     return 'todo';
   }
 
-  // Fall back to GitHub state
-  if (state === 'closed') {
-    // Check if it was closed as not_planned (won't do)
-    return 'done';
-  }
-
   // Default open issues to todo
   return 'todo';
 }
 
-// Fetch GitHub issues
+// Fetch GitHub issues using gh CLI for better auth
 async function fetchGitHubIssues(): Promise<any[]> {
   const config = getGitHubConfig();
   if (!config) return [];
@@ -228,41 +230,59 @@ async function fetchGitHubIssues(): Promise<any[]> {
 
   for (const { owner, repo, prefix } of config.repos) {
     try {
-      // Fetch open issues
-      const openResponse = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/issues?state=open&per_page=100`,
-        {
-          headers: {
-            'Authorization': `token ${config.token}`,
-            'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'Panopticon-Dashboard',
-          },
-        }
-      );
+      // Use gh CLI for fetching issues (better OAuth handling)
+      let openIssues: any[] = [];
+      let closedIssues: any[] = [];
 
-      if (!openResponse.ok) {
-        console.error(`GitHub API error for ${owner}/${repo}:`, openResponse.status);
-        continue;
+      try {
+        const openJson = execSync(
+          `gh issue list --repo ${owner}/${repo} --state open --limit 100 --json number,title,body,state,labels,assignees,createdAt,updatedAt,url`,
+          { encoding: 'utf-8', timeout: 30000 }
+        );
+        openIssues = JSON.parse(openJson);
+      } catch (ghError: any) {
+        console.error(`gh CLI failed for ${owner}/${repo} open issues:`, ghError.message);
+        // Fallback to API if gh fails
+        const openResponse = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/issues?state=open&per_page=100`,
+          {
+            headers: {
+              'Authorization': `token ${config.token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Panopticon-Dashboard',
+            },
+          }
+        );
+        if (openResponse.ok) {
+          openIssues = await openResponse.json();
+        }
       }
 
-      const openIssues = await openResponse.json();
-
-      // Fetch recently closed issues (last 30 days)
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      const closedResponse = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/issues?state=closed&since=${thirtyDaysAgo.toISOString()}&per_page=50`,
-        {
-          headers: {
-            'Authorization': `token ${config.token}`,
-            'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'Panopticon-Dashboard',
-          },
+      try {
+        const closedJson = execSync(
+          `gh issue list --repo ${owner}/${repo} --state closed --limit 50 --json number,title,body,state,labels,assignees,createdAt,updatedAt,url`,
+          { encoding: 'utf-8', timeout: 30000 }
+        );
+        closedIssues = JSON.parse(closedJson);
+      } catch (ghError: any) {
+        console.error(`gh CLI failed for ${owner}/${repo} closed issues:`, ghError.message);
+        // Fallback to API
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const closedResponse = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/issues?state=closed&since=${thirtyDaysAgo.toISOString()}&per_page=50`,
+          {
+            headers: {
+              'Authorization': `token ${config.token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Panopticon-Dashboard',
+            },
+          }
+        );
+        if (closedResponse.ok) {
+          closedIssues = await closedResponse.json();
         }
-      );
-
-      const closedIssues = closedResponse.ok ? await closedResponse.json() : [];
+      }
 
       // Combine and filter out PRs (they have pull_request key)
       const issues = [...openIssues, ...closedIssues].filter(
@@ -270,13 +290,17 @@ async function fetchGitHubIssues(): Promise<any[]> {
       );
 
       // Format issues to match our schema
+      // Handle both gh CLI format (camelCase) and API format (snake_case)
       for (const issue of issues) {
-        const labelNames = issue.labels?.map((l: any) => l.name) || [];
+        const labelNames = issue.labels?.map((l: any) => l.name || l) || [];
         const canonicalStatus = mapGitHubStateToCanonical(issue.state, labelNames);
 
         // Create identifier: use prefix if provided, otherwise repo name
         const issuePrefix = prefix || repo.toUpperCase();
         const identifier = `${issuePrefix}-${issue.number}`;
+
+        // Handle assignee: gh CLI uses assignees array, API uses assignee object
+        const firstAssignee = issue.assignees?.[0] || issue.assignee;
 
         allIssues.push({
           id: `github-${owner}-${repo}-${issue.number}`,
@@ -293,14 +317,16 @@ async function fetchGitHubIssues(): Promise<any[]> {
           priority: labelNames.some((l: string) => l.includes('priority') && l.includes('high')) ? 2 :
                     labelNames.some((l: string) => l.includes('priority') && l.includes('urgent')) ? 1 :
                     labelNames.some((l: string) => l.includes('priority') && l.includes('low')) ? 4 : 3,
-          assignee: issue.assignee ? {
-            name: issue.assignee.login,
-            email: `${issue.assignee.login}@github`,
+          assignee: firstAssignee ? {
+            name: firstAssignee.login,
+            email: `${firstAssignee.login}@github`,
           } : undefined,
           labels: labelNames,
-          url: issue.html_url,
-          createdAt: issue.created_at,
-          updatedAt: issue.updated_at,
+          // gh CLI uses 'url', API uses 'html_url'
+          url: issue.url || issue.html_url,
+          // gh CLI uses camelCase, API uses snake_case
+          createdAt: issue.createdAt || issue.created_at,
+          updatedAt: issue.updatedAt || issue.updated_at,
           // Use repo as project
           project: {
             id: `github-${owner}-${repo}`,
@@ -1380,6 +1406,18 @@ app.get('/api/workspaces/:issueId', (req, res) => {
     return res.json({ exists: false, issueId });
   }
 
+  // Check if workspace is corrupted (exists but not a valid git worktree)
+  const gitFile = join(workspacePath, '.git');
+  if (!existsSync(gitFile)) {
+    return res.json({
+      exists: true,
+      corrupted: true,
+      issueId,
+      path: workspacePath,
+      message: 'Workspace exists but is not a valid git worktree',
+    });
+  }
+
   // Get git status for main workspace and sub-repos
   const git = getGitStatus(workspacePath);
   const repoGit = getRepoGitStatus(workspacePath);
@@ -1504,6 +1542,234 @@ app.post('/api/workspaces', (req, res) => {
   } catch (error: any) {
     console.error('Error creating workspace:', error);
     res.status(500).json({ error: 'Failed to create workspace: ' + error.message });
+  }
+});
+
+// Preview what would be lost when cleaning a corrupted workspace
+// Includes diff analysis against main branch to identify actual changes
+app.get('/api/workspaces/:issueId/clean/preview', (req, res) => {
+  const { issueId } = req.params;
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
+  const workspaceName = `feature-${issueLower}`;
+  const workspacePath = join(projectPath, 'workspaces', workspaceName);
+
+  try {
+    if (!existsSync(workspacePath)) {
+      return res.status(404).json({ error: 'Workspace does not exist' });
+    }
+
+    // Get list of files (excluding common build artifacts)
+    const excludeDirs = ['node_modules', 'target', 'dist', 'build', '.git', '__pycache__', '.cache', '.next', 'coverage'];
+    const excludePattern = excludeDirs.map(d => `-name "${d}" -prune`).join(' -o ');
+
+    // Find all files, excluding build artifacts
+    const findCmd = `find "${workspacePath}" \\( ${excludePattern} \\) -o -type f -print 2>/dev/null | head -500`;
+    const filesOutput = execSync(findCmd, { encoding: 'utf-8' }).trim();
+    const files = filesOutput ? filesOutput.split('\n').map(f => f.replace(workspacePath + '/', '')) : [];
+
+    // Get total size (excluding node_modules etc)
+    let totalSize = '0';
+    try {
+      const duCmd = `du -sh "${workspacePath}" --exclude=node_modules --exclude=target --exclude=dist --exclude=.git 2>/dev/null | cut -f1`;
+      totalSize = execSync(duCmd, { encoding: 'utf-8' }).trim() || '0';
+    } catch {
+      totalSize = 'unknown';
+    }
+
+    // Categorize files by type
+    const codeFiles = files.filter(f => /\.(ts|tsx|js|jsx|java|py|rs|go|rb|php|cs|swift|kt)$/.test(f));
+    const configFiles = files.filter(f => /\.(json|yaml|yml|toml|xml|env|md)$/.test(f) || f.includes('config'));
+    const otherFiles = files.filter(f => !codeFiles.includes(f) && !configFiles.includes(f));
+
+    // Diff analysis: compare workspace files against main branch
+    // This helps identify what's actually been changed vs what would be recreated
+    let diffAnalysis: {
+      modifiedFiles: string[];
+      newFiles: string[];
+      unchangedFiles: string[];
+      comparedAgainst: string;
+      error?: string;
+    } = {
+      modifiedFiles: [],
+      newFiles: [],
+      unchangedFiles: [],
+      comparedAgainst: 'main',
+    };
+
+    try {
+      // Detect multi-repo structure (e.g., MYN has separate fe/ and api/ repos)
+      const subrepos: { prefix: string; gitRoot: string }[] = [];
+      const possibleSubrepos = ['fe', 'api', 'frontend', 'backend', 'web', 'server'];
+
+      for (const subdir of possibleSubrepos) {
+        const subdirPath = join(workspacePath, subdir);
+        if (existsSync(join(subdirPath, '.git'))) {
+          subrepos.push({ prefix: subdir + '/', gitRoot: subdirPath });
+        }
+      }
+
+      // Also check for main repo git
+      let mainGitRoot: string | null = null;
+      const possibleRoots = [projectPath, join(projectPath, '..'), workspacePath];
+      for (const root of possibleRoots) {
+        if (existsSync(join(root, '.git'))) {
+          mainGitRoot = root;
+          break;
+        }
+      }
+
+      // Sample up to 100 code files for diff analysis
+      const filesToCheck = codeFiles.slice(0, 100);
+      const reposUsed: string[] = [];
+
+      for (const file of filesToCheck) {
+        const workspaceFilePath = join(workspacePath, file);
+
+        // Find which repo this file belongs to
+        let gitRoot: string | null = null;
+        let relativePath = file;
+
+        // Check subrepos first
+        for (const { prefix, gitRoot: subGitRoot } of subrepos) {
+          if (file.startsWith(prefix)) {
+            gitRoot = subGitRoot;
+            relativePath = file.slice(prefix.length);
+            if (!reposUsed.includes(prefix)) reposUsed.push(prefix);
+            break;
+          }
+        }
+
+        // Fall back to main repo
+        if (!gitRoot && mainGitRoot) {
+          gitRoot = mainGitRoot;
+          if (!reposUsed.includes('main')) reposUsed.push('main');
+        }
+
+        if (!gitRoot) {
+          diffAnalysis.newFiles.push(file);
+          continue;
+        }
+
+        try {
+          // Check if feature branch exists in this repo
+          const branchName = `feature/${issueLower}`;
+          let compareRef = 'main';
+          try {
+            execSync(`git rev-parse --verify ${branchName} 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8' });
+            compareRef = branchName;
+          } catch {
+            // Try master if main doesn't exist
+            try {
+              execSync(`git rev-parse --verify main 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8' });
+            } catch {
+              compareRef = 'master';
+            }
+          }
+
+          // Try to get file content from git
+          const gitContent = execSync(
+            `git show ${compareRef}:${relativePath} 2>/dev/null`,
+            { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 1024 * 1024 }
+          );
+
+          // Compare with workspace file
+          const workspaceContent = readFileSync(workspaceFilePath, 'utf-8');
+
+          if (gitContent === workspaceContent) {
+            diffAnalysis.unchangedFiles.push(file);
+          } else {
+            diffAnalysis.modifiedFiles.push(file);
+          }
+        } catch {
+          // File doesn't exist in git - it's a new file
+          diffAnalysis.newFiles.push(file);
+        }
+      }
+
+      diffAnalysis.comparedAgainst = reposUsed.length > 0
+        ? `${reposUsed.join(', ')} repos (main branch)`
+        : 'main';
+
+      if (subrepos.length === 0 && !mainGitRoot) {
+        diffAnalysis.error = 'Could not find git repository to compare against';
+      }
+    } catch (diffError: any) {
+      diffAnalysis.error = `Diff analysis failed: ${diffError.message}`;
+    }
+
+    res.json({
+      workspacePath,
+      totalSize,
+      fileCount: files.length,
+      codeFiles: codeFiles.slice(0, 50),
+      configFiles: configFiles.slice(0, 30),
+      otherFiles: otherFiles.slice(0, 20),
+      hasMore: files.length > 100,
+      backupPath: join(projectPath, 'workspaces', `.backup-${workspaceName}-${Date.now()}`),
+      // Diff analysis results
+      diffAnalysis,
+    });
+  } catch (error: any) {
+    console.error('Error previewing workspace:', error);
+    res.status(500).json({ error: 'Failed to preview workspace: ' + error.message });
+  }
+});
+
+// Clean and recreate a corrupted workspace
+app.post('/api/workspaces/:issueId/clean', (req, res) => {
+  const { issueId } = req.params;
+  const { createBackup } = req.body || {};
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
+  const workspaceName = `feature-${issueLower}`;
+  const workspacePath = join(projectPath, 'workspaces', workspaceName);
+
+  try {
+    // Check if workspace exists
+    if (!existsSync(workspacePath)) {
+      return res.status(404).json({ error: 'Workspace does not exist' });
+    }
+
+    let backupPath: string | null = null;
+
+    // Create backup if requested
+    if (createBackup) {
+      backupPath = join(projectPath, 'workspaces', `.backup-${workspaceName}-${Date.now()}`);
+      console.log(`Creating backup: ${workspacePath} -> ${backupPath}`);
+
+      // Copy workspace to backup (excluding node_modules, target, etc. to save space)
+      execSync(
+        `rsync -a --exclude=node_modules --exclude=target --exclude=dist --exclude=.git --exclude=__pycache__ --exclude=.cache --exclude=.next --exclude=coverage "${workspacePath}/" "${backupPath}/"`,
+        { encoding: 'utf-8' }
+      );
+    }
+
+    // Remove the corrupted workspace directory
+    console.log(`Removing corrupted workspace: ${workspacePath}`);
+    execSync(`rm -rf "${workspacePath}"`, { encoding: 'utf-8' });
+
+    // Create fresh workspace using pan command
+    const activityId = spawnPanCommand(
+      ['workspace', 'create', issueId],
+      `Recreate workspace for ${issueId}`,
+      projectPath
+    );
+
+    res.json({
+      success: true,
+      message: createBackup
+        ? `Backed up to ${backupPath} and recreating workspace for ${issueId}`
+        : `Cleaned corrupted workspace and recreating for ${issueId}`,
+      activityId,
+      projectPath,
+      backupPath,
+    });
+  } catch (error: any) {
+    console.error('Error cleaning workspace:', error);
+    res.status(500).json({ error: 'Failed to clean workspace: ' + error.message });
   }
 });
 
@@ -1712,6 +1978,322 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
   } catch (error: any) {
     console.error('Error starting containers:', error);
     res.status(500).json({ error: 'Failed to start containers: ' + error.message });
+  }
+});
+
+// Approve workspace: merge, update Linear, clean up
+app.post('/api/workspaces/:issueId/approve', async (req, res) => {
+  const { issueId } = req.params;
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
+  const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+  const branchName = `feature/${issueLower}`;
+
+  try {
+    // 1. Check workspace exists
+    if (!existsSync(workspacePath)) {
+      return res.status(400).json({ error: 'Workspace does not exist' });
+    }
+
+    // 2. Try to merge the feature branch
+    try {
+      // First, make sure we're on main
+      execSync('git checkout main', { cwd: projectPath, encoding: 'utf-8' });
+
+      // Try the merge
+      execSync(`git merge ${branchName} --no-edit`, { cwd: projectPath, encoding: 'utf-8' });
+      console.log(`Merged ${branchName} to main`);
+    } catch (mergeError: any) {
+      // Abort the merge if there was a conflict
+      try {
+        execSync('git merge --abort', { cwd: projectPath, encoding: 'utf-8' });
+      } catch {}
+      return res.status(400).json({
+        error: `Merge conflict! Please resolve manually:\ncd ${projectPath}\ngit merge ${branchName}`
+      });
+    }
+
+    // 3. Stop any running agent
+    const agentId = `agent-${issueLower}`;
+    try {
+      execSync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
+        encoding: 'utf-8',
+        shell: '/bin/bash'
+      });
+      console.log(`Stopped agent ${agentId}`);
+    } catch {
+      // Agent not running, that's fine
+    }
+
+    // 4. Remove the workspace (git worktree)
+    try {
+      execSync(`git worktree remove workspaces/feature-${issueLower} --force`, {
+        cwd: projectPath,
+        encoding: 'utf-8'
+      });
+      console.log(`Removed workspace for ${issueId}`);
+    } catch (wtError: any) {
+      console.error('Error removing worktree:', wtError.message);
+    }
+
+    // 5. Delete the feature branch
+    try {
+      execSync(`git branch -d ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
+      console.log(`Deleted branch ${branchName}`);
+    } catch (branchError: any) {
+      // Try force delete if normal delete fails
+      try {
+        execSync(`git branch -D ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
+      } catch {}
+    }
+
+    // 6. Update Linear issue to Done (or GitHub label)
+    const apiKey = getLinearApiKey();
+    const isGitHubIssue = issueId.startsWith('PAN-');
+
+    if (isGitHubIssue) {
+      // GitHub issue - add "done" label, remove "in-progress"
+      const token = process.env.GITHUB_TOKEN;
+      if (token) {
+        const number = parseInt(issueId.split('-')[1], 10);
+        const owner = 'eltmon';
+        const repo = 'panopticon-cli';
+
+        await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/in-progress`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' },
+        }).catch(() => {});
+
+        await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels`, {
+          method: 'POST',
+          headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ labels: ['done'] }),
+        });
+
+        // Close the issue
+        await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}`, {
+          method: 'PATCH',
+          headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state: 'closed' }),
+        });
+      }
+    } else if (apiKey) {
+      // Linear issue - transition through proper states: In Progress → In Review → Done
+      try {
+        const getIssueQuery = `
+          query GetIssue($id: String!) {
+            issue(id: $id) {
+              id
+              state { id name type }
+              team { states { nodes { id name type } } }
+            }
+          }
+        `;
+        const issueResponse = await fetch('https://api.linear.app/graphql', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+          body: JSON.stringify({ query: getIssueQuery, variables: { id: issueId } }),
+        });
+        const issueJson = await issueResponse.json();
+        const states = issueJson.data?.issue?.team?.states?.nodes || [];
+        const currentState = issueJson.data?.issue?.state;
+        const linearId = issueJson.data?.issue?.id;
+
+        // Find the states we need
+        const inProgressState = states.find((s: any) => s.type === 'started' || s.name.toLowerCase() === 'in progress');
+        const inReviewState = states.find((s: any) => s.name.toLowerCase() === 'in review' || s.name.toLowerCase() === 'review');
+        const doneState = states.find((s: any) => s.type === 'completed' || s.name.toLowerCase() === 'done');
+
+        const updateMutation = `
+          mutation UpdateIssue($id: String!, $stateId: String!) {
+            issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+          }
+        `;
+
+        if (linearId) {
+          // Transition through states properly
+          // If still in Planning/Backlog, move to In Progress first
+          if (currentState?.type === 'backlog' || currentState?.type === 'unstarted') {
+            if (inProgressState) {
+              await fetch('https://api.linear.app/graphql', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+                body: JSON.stringify({ query: updateMutation, variables: { id: linearId, stateId: inProgressState.id } }),
+              });
+              console.log(`Updated ${issueId} to In Progress`);
+              await new Promise(resolve => setTimeout(resolve, 500)); // Brief delay between transitions
+            }
+          }
+
+          // Move to In Review
+          if (inReviewState) {
+            await fetch('https://api.linear.app/graphql', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+              body: JSON.stringify({ query: updateMutation, variables: { id: linearId, stateId: inReviewState.id } }),
+            });
+            console.log(`Updated ${issueId} to In Review`);
+            await new Promise(resolve => setTimeout(resolve, 500)); // Brief delay between transitions
+          }
+
+          // Finally move to Done
+          if (doneState) {
+            await fetch('https://api.linear.app/graphql', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+              body: JSON.stringify({ query: updateMutation, variables: { id: linearId, stateId: doneState.id } }),
+            });
+            console.log(`Updated ${issueId} to Done`);
+          }
+        }
+      } catch (linearError) {
+        console.error('Error updating Linear:', linearError);
+      }
+    }
+
+    // For Panopticon issues, run pan sync to distribute new skills/commands/agents
+    if (isGitHubIssue || issueId.toUpperCase().startsWith('PAN-')) {
+      try {
+        console.log('Running pan sync for Panopticon issue...');
+        execSync('pan sync', { encoding: 'utf-8', timeout: 30000 });
+        console.log('pan sync completed');
+      } catch (syncError: any) {
+        console.error('pan sync failed (non-fatal):', syncError.message);
+        // Don't fail the approve - sync failure is non-fatal
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Approved ${issueId}: merged, workspace removed, issue closed${isGitHubIssue || issueId.toUpperCase().startsWith('PAN-') ? ', skills synced' : ''}`,
+    });
+  } catch (error: any) {
+    console.error('Error approving workspace:', error);
+    res.status(500).json({ error: 'Failed to approve: ' + error.message });
+  }
+});
+
+// Close/resolve an issue manually (without merge)
+app.post('/api/issues/:issueId/close', async (req, res) => {
+  const { issueId } = req.params;
+  const { reason } = req.body;
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
+  const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+  const branchName = `feature/${issueLower}`;
+
+  try {
+    const isGitHubIssue = issueId.toUpperCase().startsWith('PAN-');
+    const apiKey = getLinearApiKey();
+
+    // 1. Close the issue (GitHub via gh CLI, Linear via API)
+    if (isGitHubIssue) {
+      const number = parseInt(issueId.split('-')[1], 10);
+      try {
+        // Use gh CLI for better auth handling
+        execSync(`gh issue close ${number} --repo eltmon/panopticon-cli --reason completed`, {
+          encoding: 'utf-8',
+          timeout: 30000,
+        });
+        console.log(`Closed GitHub issue ${issueId} via gh CLI`);
+      } catch (ghError: any) {
+        console.error('gh CLI failed, trying API:', ghError.message);
+        // Fallback to API if gh fails
+        const token = process.env.GITHUB_TOKEN;
+        if (token) {
+          await fetch(`https://api.github.com/repos/eltmon/panopticon-cli/issues/${number}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ state: 'closed' }),
+          });
+        }
+      }
+    } else if (apiKey) {
+      // Linear issue - update to Done
+      const getIssueQuery = `
+        query GetIssue($id: String!) {
+          issue(id: $id) {
+            id
+            team { states { nodes { id name type } } }
+          }
+        }
+      `;
+      const issueResponse = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+        body: JSON.stringify({ query: getIssueQuery, variables: { id: issueId } }),
+      });
+      const issueJson = await issueResponse.json();
+      const states = issueJson.data?.issue?.team?.states?.nodes || [];
+      const doneState = states.find((s: any) => s.type === 'completed' || s.name.toLowerCase() === 'done');
+      const linearId = issueJson.data?.issue?.id;
+
+      if (doneState && linearId) {
+        const updateMutation = `
+          mutation UpdateIssue($id: String!, $stateId: String!) {
+            issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+          }
+        `;
+        await fetch('https://api.linear.app/graphql', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+          body: JSON.stringify({ query: updateMutation, variables: { id: linearId, stateId: doneState.id } }),
+        });
+        console.log(`Updated Linear issue ${issueId} to Done`);
+      }
+    }
+
+    // 2. Stop any running agent
+    const agentId = `agent-${issueLower}`;
+    try {
+      execSync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
+        encoding: 'utf-8',
+        shell: '/bin/bash'
+      });
+      console.log(`Stopped agent ${agentId}`);
+    } catch {
+      // Agent not running, that's fine
+    }
+
+    // 3. Clean up workspace if it exists
+    if (existsSync(workspacePath)) {
+      try {
+        execSync(`git worktree remove workspaces/feature-${issueLower} --force`, {
+          cwd: projectPath,
+          encoding: 'utf-8'
+        });
+        console.log(`Removed workspace for ${issueId}`);
+      } catch (wtError: any) {
+        console.error('Error removing worktree:', wtError.message);
+      }
+    }
+
+    // 4. Delete feature branch if it exists
+    try {
+      execSync(`git branch -d ${branchName} 2>/dev/null || git branch -D ${branchName} 2>/dev/null || true`, {
+        cwd: projectPath,
+        encoding: 'utf-8',
+        shell: '/bin/bash'
+      });
+    } catch {}
+
+    // 5. Run pan sync for Panopticon issues
+    if (isGitHubIssue) {
+      try {
+        execSync('pan sync', { encoding: 'utf-8', timeout: 30000 });
+        console.log('pan sync completed');
+      } catch {}
+    }
+
+    res.json({
+      success: true,
+      message: `Closed ${issueId}${reason ? ': ' + reason : ''}`,
+    });
+  } catch (error: any) {
+    console.error('Error closing issue:', error);
+    res.status(500).json({ error: 'Failed to close: ' + error.message });
   }
 });
 
@@ -2949,6 +3531,19 @@ app.post('/api/issues/:id/sync-planning', (req, res) => {
       });
     }
 
+    // Verify workspace is a valid git repo (worktree)
+    const gitFile = join(workspacePath, '.git');
+    if (!existsSync(gitFile)) {
+      // Workspace directory exists but is not a git worktree - it's corrupted
+      return res.json({
+        success: false,
+        action: 'corrupted',
+        workspacePath,
+        message: 'Workspace exists but is not a valid git worktree. Please remove and recreate.',
+        suggestion: `rm -rf "${workspacePath}" && pan workspace create ${id}`,
+      });
+    }
+
     // Workspace exists - fetch and check if behind
     const branchName = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: workspacePath,
@@ -3456,6 +4051,21 @@ app.get('/api/issues/:id/beads', (req, res) => {
 
 // Ensure tmux is running at startup
 ensureTmuxRunning();
+
+// In production, serve the frontend static files
+if (process.env.NODE_ENV === 'production') {
+  const frontendPath = join(__dirname, '..', '..', 'frontend', 'dist');
+  if (existsSync(frontendPath)) {
+    app.use(express.static(frontendPath));
+    // SPA fallback - serve index.html for all non-API routes
+    app.get('*', (req, res) => {
+      if (!req.path.startsWith('/api')) {
+        res.sendFile(join(frontendPath, 'index.html'));
+      }
+    });
+    console.log(`Serving frontend from ${frontendPath}`);
+  }
+}
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Panopticon API server running on http://0.0.0.0:${PORT}`);

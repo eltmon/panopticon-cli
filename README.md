@@ -74,11 +74,20 @@ See [docs/DNS_SETUP.md](docs/DNS_SETUP.md) for detailed DNS configuration (espec
 - Git (for worktree-based workspaces)
 - Docker (for Traefik and workspace containers)
 - tmux (for agent sessions)
+- **GitHub CLI (`gh`)** - For GitHub integration (issues, PRs, merges). [Install](https://cli.github.com/)
+- **GitLab CLI (`glab`)** - For GitLab integration (if using GitLab). [Install](https://gitlab.com/gitlab-org/cli)
 
 ### Optional
 - **mkcert** - For HTTPS certificates (recommended)
 - **Linear API key** - For issue tracking integration
 - **Beads CLI (bd)** - For persistent task tracking across sessions
+
+### Why CLI tools instead of API tokens?
+
+Panopticon uses `gh` and `glab` CLIs instead of raw API tokens because:
+- **Better auth**: OAuth tokens that auto-refresh (no expiring PATs)
+- **Simpler setup**: `gh auth login` handles everything
+- **Agent-friendly**: Agents can use them for PRs, merges, reviews
 
 ## Configuration
 
@@ -307,14 +316,17 @@ Start the monitoring dashboard:
 pan up
 ```
 
-**With Traefik (HTTPS):**
-- Frontend: https://pan.localhost
-- API: https://pan.localhost/api
-- Traefik UI: https://traefik.pan.localhost:8080
+**Recommended (containerized with HTTPS):**
+- Dashboard: https://pan.localhost
+- Traefik UI: https://traefik.pan.localhost:8082
 
-**Without Traefik (port-based):**
-- Frontend: http://localhost:3001
-- API: http://localhost:3002
+This runs everything in Docker containers, avoiding port conflicts with your other projects.
+
+**Minimal install (no Docker):**
+```bash
+pan up --minimal
+```
+- Dashboard: http://localhost:3001
 
 Stop with `pan down`.
 
@@ -491,8 +503,10 @@ npm install -g panopticon-cli
 
 | Mode | Command | Use Case |
 |------|---------|----------|
-| **Dev** | `cd src/dashboard && npm run dev` | Active development, hot reload |
-| **Prod** | `pan up` | Stable usage, serves built files |
+| **Production** | `pan up` | Daily usage, containerized, HTTPS at https://pan.localhost |
+| **Dev** | `cd src/dashboard && npm run dev` | Only for active development on Panopticon itself |
+
+**Note:** Use `pan up` for normal usage - it runs in Docker and won't conflict with your project's ports. Only use dev mode when actively working on Panopticon's codebase.
 
 ### Working on Panopticon While Using It
 
@@ -521,6 +535,52 @@ server: {
 ```
 
 A 3000ms interval supports 4-5 concurrent workspaces comfortably while maintaining acceptable HMR responsiveness.
+
+### Corrupted Workspaces
+
+A workspace can become "corrupted" when it exists as a directory but is no longer a valid git worktree. The dashboard will show a yellow "Workspace Corrupted" warning with an option to clean and recreate.
+
+**Symptoms:**
+- Dashboard shows "Workspace Corrupted" warning
+- `git status` in the workspace fails with "not a git repository"
+- The `.git` file is missing from the workspace directory
+
+**Common Causes:**
+
+| Cause | Description |
+|-------|-------------|
+| **Interrupted creation** | `pan workspace create` was killed mid-execution (Ctrl+C, system crash) |
+| **Manual .git deletion** | Someone accidentally deleted the `.git` file in the workspace |
+| **Disk space issues** | Ran out of disk space during workspace creation |
+| **Git worktree pruning** | Running `git worktree prune` in the main repo removed the worktree link |
+| **Force-deleted main repo** | The main repository was moved or deleted while workspaces existed |
+
+**Resolution:**
+
+1. **Via Dashboard (recommended):**
+   - Click on the issue to open the detail panel
+   - Click "Clean & Recreate" button
+   - Review the files that will be deleted
+   - Check "Create backup" to preserve your work (recommended)
+   - Click "Backup & Recreate"
+
+2. **Via CLI:**
+   ```bash
+   # Option 1: Manual cleanup
+   rm -rf /path/to/project/workspaces/feature-issue-123
+   pan workspace create ISSUE-123
+
+   # Option 2: Backup first
+   cp -r /path/to/project/workspaces/feature-issue-123 /tmp/backup-issue-123
+   rm -rf /path/to/project/workspaces/feature-issue-123
+   pan workspace create ISSUE-123
+   # Then manually restore files from backup
+   ```
+
+**Prevention:**
+- Don't interrupt `pan workspace create` commands
+- Don't run `git worktree prune` in the main repo without checking for active workspaces
+- Ensure adequate disk space before creating workspaces
 
 ## ⭐ Star History
 
