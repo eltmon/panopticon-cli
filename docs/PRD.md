@@ -2308,6 +2308,328 @@ For `monorepo` projects, the agent should `cd` into the appropriate subdir based
 | Open source with community | GitHub |
 | Enterprise with existing tooling | GitLab or Jira |
 
+### State Mapping Architecture
+
+Panopticon uses a **richer workflow** than most trackers provide out of the box. We need to map our internal states to each tracker's capabilities.
+
+#### Panopticon's Internal Workflow States
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌─────────────┐    ┌───────────┐    ┌──────────┐
+│ backlog  │───▶│   todo   │───▶│ planning │───▶│ in_progress │───▶│ in_review │───▶│   done   │
+└──────────┘    └──────────┘    └──────────┘    └─────────────┘    └───────────┘    └──────────┘
+                                     ▲
+                               Click "Plan"
+                               - Workspace created
+                               - Opus discovery begins
+                               - Human answers questions
+                               - STATE.md generated
+```
+
+| State | Type | Description |
+|-------|------|-------------|
+| `backlog` | backlog | Ideas, future work, not prioritized |
+| `todo` | unstarted | Prioritized, ready to work on |
+| `planning` | started | **NEW**: Human + AI discovery phase, workspace being set up |
+| `in_progress` | started | Agent executing the plan |
+| `in_review` | started | PR created, awaiting review/merge |
+| `done` | completed | Work complete, PR merged |
+| `canceled` | canceled | Won't do |
+
+**Why "Planning" is a separate state:**
+- Clear signal that work has started (not just sitting in todo)
+- Workspace creation happens here (docker, git worktrees)
+- AI-driven discovery conversation happens here
+- Human involvement required (answering questions)
+- Prevents agents from starting without proper planning
+
+#### Tracker State Capabilities
+
+| Tracker | Custom States? | State Types | Fallback Options |
+|---------|---------------|-------------|------------------|
+| **Linear** | ✅ Yes (per team) | backlog, unstarted, started, completed, canceled | Labels |
+| **GitHub Issues** | ❌ Open/Closed only | open, closed | Labels, Project board columns |
+| **GitLab Issues** | ❌ Open/Closed + Labels | open, closed | Labels, Board lists |
+| **Jira** | ✅ Yes (admin required) | Configurable workflow | Often restricted by admin |
+| **Trello** | ✅ Lists = states | Lists are columns | Native fit |
+
+#### State Mapping Configuration
+
+```yaml
+# ~/.panopticon/state-mappings.yaml
+
+# Panopticon's canonical states (source of truth)
+canonical_states:
+  - name: backlog
+    type: backlog
+    description: "Ideas and future work"
+  - name: todo
+    type: unstarted
+    description: "Prioritized and ready"
+  - name: planning
+    type: started
+    description: "Discovery phase with human"
+  - name: in_progress
+    type: started
+    description: "Agent executing"
+  - name: in_review
+    type: started
+    description: "PR awaiting review"
+  - name: done
+    type: completed
+    description: "Work complete"
+  - name: canceled
+    type: canceled
+    description: "Won't do"
+
+# Tracker-specific mappings
+trackers:
+  linear:
+    # Map Panopticon states to Linear state names
+    state_map:
+      backlog: "Backlog"
+      todo: "Todo"
+      planning: "In Planning"        # May need to create
+      in_progress: "In Progress"
+      in_review: "In Review"
+      done: "Done"
+      canceled: "Canceled"
+
+    # What to do if state doesn't exist
+    missing_state_strategy: "auto_create"  # auto_create | use_fallback | error
+
+    # Fallback when state can't be created/mapped
+    fallback:
+      type: "labels"
+      prefix: "pan:"                 # pan:planning, pan:in_progress
+
+    # Linear-specific: state type for auto-created states
+    auto_create_config:
+      planning:
+        type: "started"
+        color: "#9333ea"             # Purple for planning
+        position_after: "Todo"
+
+  github:
+    # GitHub only has open/closed - use labels + project board
+    state_map:
+      backlog: { status: "open", label: null }
+      todo: { status: "open", label: null }
+      planning: { status: "open", label: "planning" }
+      in_progress: { status: "open", label: "in-progress" }
+      in_review: { status: "open", label: "in-review" }
+      done: { status: "closed", label: null }
+      canceled: { status: "closed", label: "wontfix" }
+
+    missing_state_strategy: "use_fallback"
+
+    fallback:
+      type: "labels"
+      auto_create_labels: true
+      label_colors:
+        planning: "9333ea"           # Purple
+        in-progress: "fbbf24"        # Yellow
+        in-review: "a855f7"          # Light purple
+
+    # Optional: Use GitHub Projects for visual board
+    project_board:
+      enabled: true
+      name: "Panopticon"
+      column_map:
+        backlog: "Backlog"
+        todo: "Todo"
+        planning: "In Planning"
+        in_progress: "In Progress"
+        in_review: "Review"
+        done: "Done"
+
+  gitlab:
+    state_map:
+      backlog: { status: "opened", label: "backlog" }
+      todo: { status: "opened", label: "todo" }
+      planning: { status: "opened", label: "planning" }
+      in_progress: { status: "opened", label: "in-progress" }
+      in_review: { status: "opened", label: "in-review" }
+      done: { status: "closed", label: null }
+      canceled: { status: "closed", label: "wontfix" }
+
+    missing_state_strategy: "use_fallback"
+
+    fallback:
+      type: "labels"
+      auto_create_labels: true
+
+    # GitLab boards can show label-based lists
+    board:
+      enabled: true
+      name: "Panopticon"
+
+  jira:
+    # Jira workflows are highly customizable but often locked down
+    state_map:
+      backlog: "Backlog"
+      todo: "To Do"
+      planning: "In Planning"        # May need admin to create
+      in_progress: "In Progress"
+      in_review: "In Review"
+      done: "Done"
+      canceled: "Canceled"
+
+    missing_state_strategy: "use_fallback"  # Can't auto-create in Jira
+
+    fallback:
+      type: "labels"
+      prefix: "pan-"
+```
+
+#### Virtual State Layer
+
+Panopticon maintains its **own state tracking** as the source of truth:
+
+```typescript
+// ~/.panopticon/issue-states.json
+{
+  "MIN-645": {
+    "panopticonState": "planning",      // Our canonical state
+    "trackerState": "In Progress",       // What's in Linear (may differ)
+    "lastSyncedAt": "2026-01-19T05:00:00Z",
+    "syncStatus": "synced",              // synced | pending | conflict
+    "fallbacksUsed": []                  // ["label:planning"] if applicable
+  }
+}
+```
+
+**Why virtual state layer?**
+- Panopticon knows the TRUE state even if tracker can't represent it
+- Dashboard shows Panopticon's view, not just tracker's limited view
+- Enables "planning" state even on GitHub (which only has open/closed)
+- Handles sync conflicts gracefully
+
+#### State Transition API
+
+```typescript
+interface StateManager {
+  // Get Panopticon's view of issue state
+  getState(issueId: string): Promise<PanopticonState>;
+
+  // Transition to new state (updates both Panopticon + tracker)
+  transition(issueId: string, newState: CanonicalState): Promise<TransitionResult>;
+
+  // Sync tracker state to Panopticon (pull)
+  syncFromTracker(issueId: string): Promise<SyncResult>;
+
+  // Ensure tracker has required states (auto-create if configured)
+  ensureTrackerStates(tracker: string, team?: string): Promise<SetupResult>;
+}
+
+interface TransitionResult {
+  success: boolean;
+  panopticonState: CanonicalState;
+  trackerState: string;
+  fallbacksUsed: string[];
+  warnings: string[];
+}
+
+// Canonical states
+type CanonicalState =
+  | "backlog"
+  | "todo"
+  | "planning"
+  | "in_progress"
+  | "in_review"
+  | "done"
+  | "canceled";
+```
+
+#### Setup Flow
+
+When a project is first configured, Panopticon checks tracker compatibility:
+
+```
+$ pan project add ~/projects/myn --tracker linear --team MIN
+
+Checking Linear team "MIN" for required states...
+
+✅ Backlog - exists
+✅ Todo - exists
+❌ In Planning - MISSING
+✅ In Progress - exists
+✅ In Review - exists
+✅ Done - exists
+
+Missing state: "In Planning"
+
+Options:
+1. Create it automatically (recommended)
+2. Use label fallback (label: pan:planning)
+3. Skip (planning state won't sync to Linear)
+
+Choice [1]: 1
+
+Creating "In Planning" state in Linear...
+✅ Created "In Planning" (type: started, position: after Todo)
+
+Project configured successfully!
+```
+
+#### The "In Planning" Workflow
+
+When user clicks "Plan" on an issue:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         PLAN BUTTON CLICKED                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 1. TRANSITION TO PLANNING                                                │
+│    - Update Panopticon state → "planning"                                │
+│    - Update tracker state → "In Planning" (or fallback)                  │
+│    - Log state transition                                                │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 2. CREATE WORKSPACE (async)                                              │
+│    - Git worktree for feature branch                                     │
+│    - Docker containers (if configured)                                   │
+│    - Runs in background while discovery happens                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 3. START DISCOVERY SESSION                                               │
+│    - Spawn Opus agent (or use co-mayor session)                          │
+│    - Agent reads codebase (now available in workspace)                   │
+│    - Agent follows gsd-plus questioning protocol                         │
+│    - Human answers via dashboard chat interface                          │
+│                                                                          │
+│    Questions like:                                                       │
+│    - "The issue mentions JWT auth - should we modify SecurityConfig?"    │
+│    - "I see 3 similar endpoints - should this follow the same pattern?"  │
+│    - "What's explicitly NOT in scope for this fix?"                      │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 4. GENERATE ARTIFACTS                                                    │
+│    - STATE.md with decisions and context                                 │
+│    - WORKSPACE.md with links and instructions                            │
+│    - Beads tasks with dependencies                                       │
+│    - Planning marked complete                                            │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ 5. READY FOR EXECUTION                                                   │
+│    User choice:                                                          │
+│    - "Start Agent" → transition to in_progress, spawn execution agent    │
+│    - "Review Plan" → stay in planning, human reviews artifacts           │
+│    - "Edit Plan" → modify STATE.md/tasks before starting                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Commands
 
 ```bash
@@ -3988,8 +4310,135 @@ All open questions have been answered. Panopticon PRD is ready for implementatio
 
 ---
 
+## Part 16: PRD Convention and Project Initialization
+
+### The Canonical PRD
+
+Every Panopticon-managed project has a **canonical PRD** (`docs/PRD.md`) that defines the core product vision, architecture, and requirements. This serves as the ground truth that agents reference when working on the project.
+
+### PRD Hierarchy
+
+```
+{project}/
+├── docs/
+│   └── PRD.md                     # Canonical PRD (core product)
+├── workspaces/
+│   └── feature-{issue}/
+│       └── docs/
+│           └── {ISSUE}-plan.md    # Feature PRD (in feature branch)
+└── .planning/
+    └── {issue}/
+        ├── PLANNING_PROMPT.md     # Agent planning prompt
+        └── STATE.md               # Planning session state
+```
+
+### Feature PRDs Live in Workspaces
+
+When planning starts for an issue, Panopticon creates a feature PRD in the workspace (git worktree). This design decision is intentional:
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **PRD in main** | Survives workspace deletion | Orphaned PRDs if work abandoned |
+| **PRD in workspace** ✅ | Merged with PR, clean separation | Lost if workspace deleted |
+
+**Decision:** Feature PRDs live in workspaces because:
+
+1. **Documentation travels with code** - The feature PRD gets merged when the PR merges
+2. **No orphans** - Deleting a workspace (aborting work) also removes its PRD
+3. **Clean lifecycle** - Each feature is self-contained in its branch
+
+### Project Initialization Flow
+
+When registering a new project with `pan project add`, Panopticon performs PRD discovery:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   PRD Discovery Flow                         │
+└─────────────────────────────────────────────────────────────┘
+
+1. Search for existing PRD
+   ├── docs/PRD.md
+   ├── PRD.md
+   ├── README.md (if substantial)
+   └── Other documentation files
+
+2. If PRD found:
+   ├── Parse existing content
+   ├── Identify missing sections (goals, architecture, etc.)
+   └── Prompt user for missing information
+
+3. If no PRD found:
+   ├── Analyze codebase structure
+   ├── Identify technologies and patterns
+   ├── Ask discovery questions:
+   │   ├── What is this project's purpose?
+   │   ├── Who are the target users?
+   │   ├── What are the core features?
+   │   └── What are the technical constraints?
+   └── Generate canonical PRD from responses
+
+4. Write docs/PRD.md in canonical format
+```
+
+### Canonical PRD Sections
+
+Every canonical PRD should include (agent will prompt for missing sections):
+
+| Section | Required | Description |
+|---------|----------|-------------|
+| **Executive Summary** | ✅ | One-paragraph product description |
+| **Goals & Non-Goals** | ✅ | What we're building and explicitly NOT building |
+| **User Personas** | ✅ | Who uses this product |
+| **Core Features** | ✅ | Primary functionality |
+| **Architecture** | ✅ | Technical structure |
+| **Tech Stack** | ✅ | Languages, frameworks, infrastructure |
+| **API/Interface Contracts** | Optional | External interfaces |
+| **Data Model** | Optional | Key entities and relationships |
+| **Security Considerations** | Optional | Auth, permissions, threats |
+| **Open Questions** | Optional | Unresolved decisions |
+
+### Naming Convention
+
+| Document Type | Name Format | Example |
+|--------------|-------------|---------|
+| Canonical PRD | `PRD.md` | `docs/PRD.md` |
+| Feature PRD | `{ISSUE}-plan.md` | `PAN-4-plan.md` |
+| Planning prompt | `PLANNING_PROMPT.md` | `.planning/pan-4/PLANNING_PROMPT.md` |
+| Planning state | `STATE.md` | `.planning/pan-4/STATE.md` |
+
+### CLI Commands
+
+```bash
+# Initialize/regenerate canonical PRD
+pan prd init
+
+# Show PRD status
+pan prd status
+# Output:
+# Canonical PRD: docs/PRD.md ✅
+# Last updated: 2026-01-15
+# Sections: 8/10 complete
+# Missing: Security Considerations, Open Questions
+
+# Validate PRD completeness
+pan prd validate
+```
+
+### Agent Integration
+
+When an agent is spawned for an issue, it automatically has access to:
+
+1. **Canonical PRD** - Always included in context for product understanding
+2. **Feature PRD** - If planning has been completed for this issue
+3. **Related PRDs** - If the issue references other features
+
+This ensures agents understand both the overall product vision and the specific feature requirements.
+
+---
+
 *Document created: 2026-01-16 (Original PRD)*
 *Merged: 2026-01-17 (Combined with Expanded Thoughts)*
 *Part 14 added: 2026-01-17 (Installation, CLI & Portability)*
 *Part 15 added: 2026-01-17 (Per-Feature Cost Tracking)*
+*Part 16 added: 2026-01-19 (PRD Convention and Project Initialization)*
 *Ready for: Weekend Implementation*

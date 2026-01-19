@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { KanbanBoard } from './components/KanbanBoard';
 import { AgentList } from './components/AgentList';
@@ -8,10 +8,14 @@ import { SkillsList } from './components/SkillsList';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { IssueDetailPanel } from './components/IssueDetailPanel';
 import { ActivityPanel } from './components/ActivityPanel';
-import { Eye, LayoutGrid, Users, Activity, BookOpen, Terminal } from 'lucide-react';
+import { Eye, LayoutGrid, Users, Activity, BookOpen, Terminal, Maximize2, Minimize2 } from 'lucide-react';
 import { Agent, Issue } from './types';
 
 type Tab = 'kanban' | 'agents' | 'skills' | 'health' | 'activity';
+
+const MIN_PANEL_WIDTH = 400;
+const MAX_PANEL_WIDTH = 1200;
+const DEFAULT_PANEL_WIDTH = 700;
 
 async function fetchAgents(): Promise<Agent[]> {
   const res = await fetch('/api/agents');
@@ -29,6 +33,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('kanban');
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Fetch agents to find if selected issue has an agent
   const { data: agents = [] } = useQuery({
@@ -53,8 +61,47 @@ export default function App() {
     ? issues.find((i) => i.identifier.toLowerCase() === selectedIssue.toLowerCase())
     : null;
 
+  // Handle resize drag
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isResizing || !containerRef.current) return;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const newWidth = containerRect.right - e.clientX;
+    setPanelWidth(Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, newWidth)));
+  }, [isResizing]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing, handleMouseMove, handleMouseUp]);
+
+  const toggleExpand = useCallback(() => {
+    setIsExpanded((prev) => !prev);
+  }, []);
+
+  // Calculate actual panel width (expanded = full width minus a small margin for kanban)
+  const actualPanelWidth = isExpanded ? 'calc(100% - 300px)' : `${panelWidth}px`;
+
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col">
+    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
       <header className="bg-gray-800 border-b border-gray-700 px-6 py-4 shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -86,7 +133,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main ref={containerRef} className="flex-1 flex overflow-hidden">
         {activeTab === 'kanban' && (
           <>
             <div className={`flex-1 overflow-auto p-6 ${selectedIssue ? '' : 'w-full'}`}>
@@ -96,13 +143,31 @@ export default function App() {
               />
             </div>
             {selectedIssue && selectedIssueAgent && (
-              <div className="w-[700px] shrink-0 h-full">
-                <WorkspacePanel
-                  agent={selectedIssueAgent}
-                  issueUrl={selectedIssueData?.url}
-                  onClose={() => setSelectedIssue(null)}
+              <>
+                {/* Resize handle */}
+                <div
+                  onMouseDown={handleMouseDown}
+                  className={`w-1 hover:w-1.5 bg-gray-700 hover:bg-blue-500 cursor-col-resize transition-colors shrink-0 ${
+                    isResizing ? 'bg-blue-500' : ''
+                  }`}
                 />
-              </div>
+                <div style={{ width: actualPanelWidth }} className="relative shrink-0 h-full flex flex-col">
+                  {/* Expand/collapse button */}
+                  <button
+                    onClick={toggleExpand}
+                    className="absolute top-2 left-2 z-10 p-1.5 bg-gray-700 hover:bg-gray-600 rounded text-gray-400 hover:text-white"
+                    title={isExpanded ? 'Collapse panel' : 'Expand panel'}
+                  >
+                    {isExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  </button>
+                  <WorkspacePanel
+                    agent={selectedIssueAgent}
+                    issueId={selectedIssue}
+                    issueUrl={selectedIssueData?.url}
+                    onClose={() => setSelectedIssue(null)}
+                  />
+                </div>
+              </>
             )}
             {selectedIssue && !selectedIssueAgent && selectedIssueData && (
               <div className="w-[400px] shrink-0 h-full">

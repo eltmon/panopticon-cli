@@ -61,6 +61,8 @@ export function registerWorkCommands(program: Command): void {
     .description('Create execution plan before spawning')
     .option('-o, --output <path>', 'Output file path')
     .option('--json', 'Output as JSON')
+    .option('--skip-discovery', 'Skip interactive discovery phase')
+    .option('--force', 'Force planning even for simple issues')
     .action(planCommand);
 
   work

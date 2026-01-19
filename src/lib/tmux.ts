@@ -38,11 +38,31 @@ export function sessionExists(name: string): boolean {
 
 export function createSession(name: string, cwd: string, initialCommand?: string): void {
   const escapedCwd = cwd.replace(/"/g, '\\"');
-  const cmd = initialCommand
-    ? `tmux new-session -d -s ${name} -c "${escapedCwd}" "${initialCommand.replace(/"/g, '\\"')}"`
-    : `tmux new-session -d -s ${name} -c "${escapedCwd}"`;
 
-  execSync(cmd);
+  // For complex commands (with special chars), start session first then send command
+  if (initialCommand && (initialCommand.includes('`') || initialCommand.includes('\n') || initialCommand.length > 500)) {
+    // Create session without command
+    execSync(`tmux new-session -d -s ${name} -c "${escapedCwd}"`);
+
+    // Small delay to let session initialize
+    execSync('sleep 0.5');
+
+    // Send the command in chunks if needed (tmux has buffer limits)
+    // First, write to a temp file and source it
+    const tmpFile = `/tmp/pan-cmd-${name}.sh`;
+    const fs = require('fs');
+    fs.writeFileSync(tmpFile, initialCommand);
+    fs.chmodSync(tmpFile, '755');
+
+    // Execute the script
+    execSync(`tmux send-keys -t ${name} "bash ${tmpFile}" Enter`);
+  } else if (initialCommand) {
+    // Simple command - use inline
+    const cmd = `tmux new-session -d -s ${name} -c "${escapedCwd}" "${initialCommand.replace(/"/g, '\\"')}"`;
+    execSync(cmd);
+  } else {
+    execSync(`tmux new-session -d -s ${name} -c "${escapedCwd}"`);
+  }
 }
 
 export function killSession(name: string): void {

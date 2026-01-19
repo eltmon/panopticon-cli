@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { execSync } from 'child_process';
 import { AGENTS_DIR } from './paths.js';
 import { createSession, killSession, sendKeys, sessionExists, getAgentSessions } from './tmux.js';
 import { initHook, checkHook, generateGUPPPrompt } from './hooks.js';
@@ -82,12 +83,44 @@ export function spawnAgent(options: SpawnOptions): AgentState {
     }
   }
 
-  // Create tmux session with claude command (YOLO mode - skip permissions)
-  const claudeCmd = prompt
-    ? `claude --dangerously-skip-permissions --model ${state.model} "${prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`
-    : `claude --dangerously-skip-permissions --model ${state.model}`;
+  // Write prompt to file for complex prompts (avoids shell escaping issues)
+  const promptFile = join(getAgentDir(agentId), 'initial-prompt.md');
+  if (prompt) {
+    writeFileSync(promptFile, prompt);
+  }
 
+  // Create tmux session and start claude
+  const claudeCmd = `claude --dangerously-skip-permissions --model ${state.model}`;
   createSession(agentId, options.workspace, claudeCmd);
+
+  // If there's a prompt, load it via tmux buffer after claude starts
+  if (prompt) {
+    // Wait for claude to be ready by checking for the prompt character
+    // Claude shows "❯" when ready for input
+    let ready = false;
+    for (let i = 0; i < 15; i++) {  // Max 15 seconds
+      execSync('sleep 1');
+      try {
+        const pane = execSync(`tmux capture-pane -t ${agentId} -p`, { encoding: 'utf-8' });
+        if (pane.includes('❯') || pane.includes('>')) {
+          ready = true;
+          break;
+        }
+      } catch {}
+    }
+
+    if (ready) {
+      // Use tmux load-buffer and paste-buffer to send the prompt
+      // This avoids all shell escaping issues
+      execSync(`tmux load-buffer "${promptFile}"`);
+      execSync(`tmux paste-buffer -t ${agentId}`);
+      // Small delay to let paste complete, then send Enter
+      execSync('sleep 0.5');
+      execSync(`tmux send-keys -t ${agentId} Enter`);
+    } else {
+      console.error('Claude did not become ready in time, prompt not sent');
+    }
+  }
 
   // Update status
   state.status = 'running';

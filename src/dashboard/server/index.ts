@@ -1,9 +1,24 @@
 import express from 'express';
 import cors from 'cors';
 import { execSync, spawn } from 'child_process';
-import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync, renameSync } from 'fs';
+import { join, dirname } from 'path';
 import { homedir } from 'os';
+
+// Ensure tmux server is running (starts one if not)
+function ensureTmuxRunning(): void {
+  try {
+    execSync('tmux list-sessions 2>/dev/null', { encoding: 'utf-8' });
+  } catch (e) {
+    // Tmux server not running, start it with a dummy session
+    try {
+      execSync('tmux new-session -d -s panopticon-init', { encoding: 'utf-8' });
+      console.log('Started tmux server');
+    } catch (startErr) {
+      console.error('Failed to start tmux server:', startErr);
+    }
+  }
+}
 
 // Activity log for tracking pan command output
 const ACTIVITY_LOG = '/tmp/panopticon-activity.log';
@@ -120,17 +135,235 @@ function getLinearApiKey(): string | null {
   return process.env.LINEAR_API_KEY || null;
 }
 
+// GitHub configuration
+interface GitHubConfig {
+  token: string;
+  repos: Array<{ owner: string; repo: string; prefix?: string }>;
+}
+
+function getGitHubConfig(): GitHubConfig | null {
+  const envFile = join(homedir(), '.panopticon.env');
+  if (!existsSync(envFile)) return null;
+
+  const content = readFileSync(envFile, 'utf-8');
+
+  // Look for GITHUB_TOKEN
+  const tokenMatch = content.match(/GITHUB_TOKEN=(.+)/);
+  if (!tokenMatch) return null;
+
+  const token = tokenMatch[1].trim();
+
+  // Look for GITHUB_REPOS (format: owner/repo,owner/repo:PREFIX)
+  const reposMatch = content.match(/GITHUB_REPOS=(.+)/);
+  if (!reposMatch) return null;
+
+  const repos = reposMatch[1].trim().split(',').map(r => {
+    const [repoPath, prefix] = r.trim().split(':');
+    const [owner, repo] = repoPath.split('/');
+    return { owner, repo, prefix };
+  }).filter(r => r.owner && r.repo);
+
+  if (repos.length === 0) return null;
+
+  return { token, repos };
+}
+
+// Get GitHub local paths mapping
+function getGitHubLocalPaths(): Record<string, string> {
+  const envFile = join(homedir(), '.panopticon.env');
+  if (!existsSync(envFile)) return {};
+
+  const content = readFileSync(envFile, 'utf-8');
+  const match = content.match(/GITHUB_LOCAL_PATHS=(.+)/);
+  if (!match) return {};
+
+  return Object.fromEntries(
+    match[1].trim().split(',').filter(Boolean).map(p => {
+      const [repo, path] = p.split('=');
+      return [repo, path];
+    })
+  );
+}
+
+// Map GitHub issue state + labels to canonical state
+function mapGitHubStateToCanonical(state: string, labels: string[]): string {
+  // Check for explicit state labels first
+  const labelNames = labels.map(l => l.toLowerCase());
+
+  if (labelNames.some(l => l.includes('planning') || l.includes('discovery'))) {
+    return 'planning';
+  }
+  if (labelNames.some(l => l === 'planned')) {
+    return 'planned';
+  }
+  if (labelNames.some(l => l.includes('in review') || l.includes('review') || l.includes('qa'))) {
+    return 'in_review';
+  }
+  if (labelNames.some(l => l.includes('in progress') || l.includes('wip'))) {
+    return 'in_progress';
+  }
+  if (labelNames.some(l => l.includes('backlog') || l.includes('icebox'))) {
+    return 'backlog';
+  }
+  if (labelNames.some(l => l.includes('todo') || l.includes('ready'))) {
+    return 'todo';
+  }
+
+  // Fall back to GitHub state
+  if (state === 'closed') {
+    // Check if it was closed as not_planned (won't do)
+    return 'done';
+  }
+
+  // Default open issues to todo
+  return 'todo';
+}
+
+// Fetch GitHub issues
+async function fetchGitHubIssues(): Promise<any[]> {
+  const config = getGitHubConfig();
+  if (!config) return [];
+
+  const allIssues: any[] = [];
+
+  for (const { owner, repo, prefix } of config.repos) {
+    try {
+      // Fetch open issues
+      const openResponse = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/issues?state=open&per_page=100`,
+        {
+          headers: {
+            'Authorization': `token ${config.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'Panopticon-Dashboard',
+          },
+        }
+      );
+
+      if (!openResponse.ok) {
+        console.error(`GitHub API error for ${owner}/${repo}:`, openResponse.status);
+        continue;
+      }
+
+      const openIssues = await openResponse.json();
+
+      // Fetch recently closed issues (last 30 days)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const closedResponse = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/issues?state=closed&since=${thirtyDaysAgo.toISOString()}&per_page=50`,
+        {
+          headers: {
+            'Authorization': `token ${config.token}`,
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'Panopticon-Dashboard',
+          },
+        }
+      );
+
+      const closedIssues = closedResponse.ok ? await closedResponse.json() : [];
+
+      // Combine and filter out PRs (they have pull_request key)
+      const issues = [...openIssues, ...closedIssues].filter(
+        (issue: any) => !issue.pull_request
+      );
+
+      // Format issues to match our schema
+      for (const issue of issues) {
+        const labelNames = issue.labels?.map((l: any) => l.name) || [];
+        const canonicalStatus = mapGitHubStateToCanonical(issue.state, labelNames);
+
+        // Create identifier: use prefix if provided, otherwise repo name
+        const issuePrefix = prefix || repo.toUpperCase();
+        const identifier = `${issuePrefix}-${issue.number}`;
+
+        allIssues.push({
+          id: `github-${owner}-${repo}-${issue.number}`,
+          identifier,
+          title: issue.title,
+          description: issue.body || '',
+          status: canonicalStatus === 'todo' ? 'Todo' :
+                  canonicalStatus === 'planning' ? 'In Planning' :
+                  canonicalStatus === 'planned' ? 'Planned' :
+                  canonicalStatus === 'in_progress' ? 'In Progress' :
+                  canonicalStatus === 'in_review' ? 'In Review' :
+                  canonicalStatus === 'done' ? 'Done' :
+                  canonicalStatus === 'backlog' ? 'Backlog' : 'Todo',
+          priority: labelNames.some((l: string) => l.includes('priority') && l.includes('high')) ? 2 :
+                    labelNames.some((l: string) => l.includes('priority') && l.includes('urgent')) ? 1 :
+                    labelNames.some((l: string) => l.includes('priority') && l.includes('low')) ? 4 : 3,
+          assignee: issue.assignee ? {
+            name: issue.assignee.login,
+            email: `${issue.assignee.login}@github`,
+          } : undefined,
+          labels: labelNames,
+          url: issue.html_url,
+          createdAt: issue.created_at,
+          updatedAt: issue.updated_at,
+          // Use repo as project
+          project: {
+            id: `github-${owner}-${repo}`,
+            name: `${owner}/${repo}`,
+            color: '#333',
+            icon: 'github',
+          },
+          // Mark source as GitHub
+          source: 'github',
+          sourceRepo: `${owner}/${repo}`,
+        });
+      }
+    } catch (error) {
+      console.error(`Error fetching GitHub issues for ${owner}/${repo}:`, error);
+    }
+  }
+
+  console.log(`Fetched ${allIssues.length} GitHub issues`);
+  return allIssues;
+}
+
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // Get Linear issues using raw GraphQL for efficiency (single query with all data)
-app.get('/api/issues', async (_req, res) => {
+// Query params:
+//   - cycle: 'current' (default) | 'all' | 'backlog' - filter by cycle
+//   - includeCompleted: 'true' | 'false' (default) - include completed issues
+app.get('/api/issues', async (req, res) => {
   try {
     const apiKey = getLinearApiKey();
     if (!apiKey) {
       return res.status(500).json({ error: 'LINEAR_API_KEY not configured' });
+    }
+
+    const cycleFilter = (req.query.cycle as string) || 'current';
+    const includeCompleted = req.query.includeCompleted === 'true';
+
+    // Build filter conditions as array
+    const filterConditions: string[] = [];
+
+    if (cycleFilter === 'current') {
+      // Filter to current active cycle only
+      filterConditions.push('cycle: { isActive: { eq: true } }');
+    } else if (cycleFilter === 'backlog') {
+      // Issues not in any cycle
+      filterConditions.push('cycle: { null: true }');
+    }
+    // 'all' = no cycle filter
+
+    // Optionally exclude completed issues
+    if (!includeCompleted) {
+      filterConditions.push('state: { type: { nin: ["completed", "canceled"] } }');
+    }
+
+    // Build final filter clause
+    let filterClause = '';
+    if (filterConditions.length === 1) {
+      filterClause = `filter: { ${filterConditions[0]} }`;
+    } else if (filterConditions.length > 1) {
+      filterClause = `filter: { and: [${filterConditions.map(c => `{ ${c} }`).join(', ')}] }`;
     }
 
     // Use raw GraphQL to fetch all data in one query per page (no lazy loading)
@@ -141,7 +374,7 @@ app.get('/api/issues', async (_req, res) => {
     while (hasMore) {
       const query = `
         query GetIssues($after: String) {
-          issues(first: 100, after: $after, orderBy: updatedAt) {
+          issues(first: 100, after: $after, ${filterClause ? filterClause + ', ' : ''}orderBy: updatedAt) {
             pageInfo {
               hasNextPage
               endCursor
@@ -157,6 +390,7 @@ app.get('/api/issues', async (_req, res) => {
               updatedAt
               state {
                 name
+                type
               }
               assignee {
                 name
@@ -178,6 +412,11 @@ app.get('/api/issues', async (_req, res) => {
                 name
                 color
                 icon
+              }
+              cycle {
+                id
+                name
+                number
               }
             }
           }
@@ -211,15 +450,16 @@ app.get('/api/issues', async (_req, res) => {
       if (allIssues.length > 1000) break;
     }
 
-    console.log(`Fetched ${allIssues.length} issues`);
+    console.log(`Fetched ${allIssues.length} Linear issues (cycle=${cycleFilter}, includeCompleted=${includeCompleted})`);
 
-    // Format issues (data is already resolved, no extra API calls)
-    const formatted = allIssues.map((issue: any) => ({
+    // Format Linear issues (data is already resolved, no extra API calls)
+    const linearFormatted = allIssues.map((issue: any) => ({
       id: issue.id,
       identifier: issue.identifier,
       title: issue.title,
       description: issue.description,
       status: issue.state?.name || 'Backlog',
+      stateType: issue.state?.type,
       priority: issue.priority,
       assignee: issue.assignee ? { name: issue.assignee.name, email: issue.assignee.email } : undefined,
       labels: issue.labels?.nodes?.map((l: any) => l.name) || [],
@@ -238,12 +478,372 @@ app.get('/api/issues', async (_req, res) => {
         color: issue.team.color,
         icon: issue.team.icon,
       } : undefined,
+      // Include cycle info
+      cycle: issue.cycle ? {
+        id: issue.cycle.id,
+        name: issue.cycle.name,
+        number: issue.cycle.number,
+      } : undefined,
+      // Mark source as Linear
+      source: 'linear',
     }));
 
-    res.json(formatted);
+    // Fetch GitHub issues in parallel
+    const githubIssues = await fetchGitHubIssues();
+
+    // Merge and sort by updatedAt
+    const allFormatted = [...linearFormatted, ...githubIssues].sort((a, b) =>
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+
+    res.json(allFormatted);
   } catch (error: any) {
     console.error('Error fetching issues:', error);
     res.status(500).json({ error: 'Failed to fetch issues: ' + error.message });
+  }
+});
+
+// Analyze issue complexity
+app.get('/api/issues/:id/analyze', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const apiKey = getLinearApiKey();
+    if (!apiKey) {
+      return res.status(500).json({ error: 'LINEAR_API_KEY not configured' });
+    }
+
+    // Linear's issue query accepts both UUIDs and identifiers (MIN-123)
+    const query = `
+      query GetIssue($id: String!) {
+        issue(id: $id) {
+          id
+          identifier
+          title
+          description
+          priority
+          url
+          state { name }
+          labels { nodes { name } }
+          project { id name }
+        }
+      }
+    `;
+
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({ query, variables: { id } }),
+    });
+    const json = await response.json();
+    if (json.errors) throw new Error(json.errors[0]?.message || 'GraphQL error');
+    const issue = json.data?.issue;
+
+    if (!issue) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+
+    // Analyze complexity
+    const desc = (issue.description || '').toLowerCase();
+    const title = issue.title.toLowerCase();
+    const combined = `${title} ${desc}`;
+
+    const reasons: string[] = [];
+    const subsystems: string[] = [];
+    let estimatedTasks = 1;
+
+    // Check for multiple subsystems
+    if (combined.includes('frontend') || combined.includes('ui') || combined.includes('component')) {
+      subsystems.push('frontend');
+    }
+    if (combined.includes('backend') || combined.includes('api') || combined.includes('endpoint')) {
+      subsystems.push('backend');
+    }
+    if (combined.includes('database') || combined.includes('migration') || combined.includes('schema')) {
+      subsystems.push('database');
+    }
+    if (combined.includes('test') || combined.includes('e2e') || combined.includes('playwright')) {
+      subsystems.push('tests');
+    }
+
+    if (subsystems.length > 1) {
+      reasons.push(`Multiple subsystems involved: ${subsystems.join(', ')}`);
+      estimatedTasks += subsystems.length;
+    }
+
+    // Check for ambiguous requirements
+    const ambiguousPatterns = ['should we', 'maybe', 'or', 'consider', 'option', 'approach', 'tbd', 'unclear'];
+    for (const pattern of ambiguousPatterns) {
+      if (combined.includes(pattern)) {
+        reasons.push('Requirements may be ambiguous');
+        break;
+      }
+    }
+
+    // Check for architecture keywords
+    const architecturePatterns = ['refactor', 'architecture', 'redesign', 'migrate', 'integration', 'authentication'];
+    for (const pattern of architecturePatterns) {
+      if (combined.includes(pattern)) {
+        reasons.push(`Architecture decision needed: ${pattern}`);
+        estimatedTasks += 2;
+        break;
+      }
+    }
+
+    // Check description length
+    if (desc.length > 500) {
+      reasons.push('Detailed description suggests complexity');
+      estimatedTasks += 1;
+    }
+
+    // Check labels for complexity hints
+    const labels = issue.labels?.nodes?.map((l: any) => l.name) || [];
+    const complexLabels = ['complex', 'large', 'epic', 'multi-phase', 'architecture'];
+    for (const label of labels) {
+      if (complexLabels.some(cl => label.toLowerCase().includes(cl))) {
+        reasons.push(`Label indicates complexity: ${label}`);
+        estimatedTasks += 2;
+      }
+    }
+
+    const isComplex = reasons.length >= 2 || subsystems.length > 1 || estimatedTasks >= 4;
+
+    res.json({
+      issue: {
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        description: issue.description,
+        status: issue.state?.name || 'Unknown',
+        priority: issue.priority,
+        url: issue.url,
+        labels,
+      },
+      complexity: {
+        isComplex,
+        reasons,
+        subsystems,
+        estimatedTasks: Math.max(estimatedTasks, subsystems.length + 1),
+      },
+    });
+  } catch (error: any) {
+    console.error('Error analyzing issue:', error);
+    res.status(500).json({ error: 'Failed to analyze issue: ' + error.message });
+  }
+});
+
+// Create execution plan for an issue
+app.post('/api/issues/:id/plan', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { answers, tasks } = req.body;
+
+    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+      return res.status(400).json({ error: 'Tasks are required' });
+    }
+
+    // Get issue details first
+    const apiKey = getLinearApiKey();
+    if (!apiKey) {
+      return res.status(500).json({ error: 'LINEAR_API_KEY not configured' });
+    }
+
+    // Linear's issue query accepts both UUIDs and identifiers (MIN-123)
+    const query = `
+      query GetIssue($id: String!) {
+        issue(id: $id) {
+          id
+          identifier
+          title
+          description
+          url
+        }
+      }
+    `;
+    const response = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+      },
+      body: JSON.stringify({ query, variables: { id } }),
+    });
+    const json = await response.json();
+    if (json.errors) throw new Error(json.errors[0]?.message || 'GraphQL error');
+    const issue = json.data?.issue;
+
+    if (!issue) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+
+    // Find project path for this issue
+    const mappings = getProjectMappings();
+    const prefix = issue.identifier.split('-')[0];
+    const mapping = mappings.find(m => m.linearPrefix.toUpperCase() === prefix.toUpperCase());
+    const projectPath = mapping?.localPath || getDefaultProjectPath();
+
+    // Generate STATE.md content
+    const stateContent = [
+      `# Agent State: ${issue.identifier}`,
+      '',
+      `**Last Updated:** ${new Date().toISOString()}`,
+      '',
+      '## Current Position',
+      '',
+      `- **Issue:** ${issue.identifier}`,
+      `- **Title:** ${issue.title}`,
+      `- **Status:** Planning complete, ready for execution`,
+      `- **Linear:** ${issue.url}`,
+      '',
+      '## Decisions Made During Planning',
+      '',
+    ];
+
+    if (answers && Object.keys(answers).length > 0) {
+      if (answers.scope) stateContent.push(`- **Scope:** ${answers.scope}`);
+      if (answers.approach) stateContent.push(`- **Technical approach:** ${answers.approach}`);
+      if (answers.edgeCases) stateContent.push(`- **Edge cases:** ${answers.edgeCases}`);
+      if (answers.testing && answers.testing.length > 0) stateContent.push(`- **Testing:** ${answers.testing.join(', ')}`);
+      if (answers.outOfScope) stateContent.push(`- **Out of scope:** ${answers.outOfScope}`);
+    } else {
+      stateContent.push('- No specific decisions recorded');
+    }
+
+    stateContent.push('');
+    stateContent.push('## Planned Tasks');
+    stateContent.push('');
+
+    for (const task of tasks) {
+      stateContent.push(`- [ ] ${task.name}${task.dependsOn ? ` (after: ${task.dependsOn})` : ''}`);
+    }
+
+    stateContent.push('');
+    stateContent.push('## Blockers/Concerns');
+    stateContent.push('');
+    stateContent.push('- None identified during planning');
+    stateContent.push('');
+    stateContent.push('## Notes');
+    stateContent.push('');
+    stateContent.push('<!-- Add notes as work progresses -->');
+    stateContent.push('');
+
+    // Generate WORKSPACE.md content
+    const workspaceContent = [
+      `# Workspace: ${issue.identifier}`,
+      '',
+      `> ${issue.title}`,
+      '',
+      '## Quick Links',
+      '',
+      `- [Linear Issue](${issue.url})`,
+      '',
+      '## Context Files',
+      '',
+      '- `STATE.md` - Current progress and decisions',
+      '- `WORKSPACE.md` - This file',
+      '',
+      '## Beads',
+      '',
+      'Check current task status:',
+      '```bash',
+      'bd ready  # Next actionable task',
+      `bd list --tag ${issue.identifier}  # All tasks for this issue`,
+      '```',
+      '',
+      '## Agent Instructions',
+      '',
+      '1. Run `bd ready` to get next task',
+      '2. Complete the task following relevant skills',
+      '3. Run `bd close "<task name>" --reason "..."` when done',
+      '4. Update STATE.md with progress',
+      '5. Repeat until all tasks complete',
+      '',
+    ];
+
+    // Write files to .planning directory
+    const { mkdirSync, writeFileSync: writeSync } = require('fs');
+    const planningDir = join(projectPath, '.planning');
+    mkdirSync(planningDir, { recursive: true });
+
+    const statePath = join(planningDir, 'STATE.md');
+    const workspacePath = join(planningDir, 'WORKSPACE.md');
+    writeSync(statePath, stateContent.join('\n'));
+    writeSync(workspacePath, workspaceContent.join('\n'));
+
+    // Copy to PRD directory
+    let prdPath: string | undefined;
+    try {
+      const prdDir = join(projectPath, 'docs', 'prds', 'active');
+      mkdirSync(prdDir, { recursive: true });
+      prdPath = join(prdDir, `${issue.identifier.toLowerCase()}-plan.md`);
+      writeSync(prdPath, stateContent.join('\n'));
+    } catch {
+      // PRD copy is optional
+    }
+
+    // Create Beads tasks
+    const beadsResult = { success: false, created: [] as string[], errors: [] as string[] };
+    try {
+      const bdPath = execSync('which bd', { encoding: 'utf-8' }).trim();
+      if (bdPath) {
+        const taskIds = new Map<string, string>();
+
+        for (const task of tasks) {
+          const fullName = `${issue.identifier}: ${task.name}`;
+          try {
+            let cmd = `bd create "${fullName.replace(/"/g, '\\"')}" --type task -l "${issue.identifier},linear"`;
+
+            if (task.dependsOn) {
+              const depName = `${issue.identifier}: ${task.dependsOn}`;
+              const depId = taskIds.get(depName);
+              if (depId) {
+                cmd += ` --deps "blocks:${depId}"`;
+              }
+            }
+
+            if (task.description) {
+              cmd += ` -d "${task.description.replace(/"/g, '\\"')}"`;
+            }
+
+            const result = execSync(cmd, { encoding: 'utf-8', cwd: projectPath });
+            const idMatch = result.match(/bd-[a-f0-9]+/i) || result.match(/([a-f0-9-]{8,})/i);
+            if (idMatch) {
+              taskIds.set(fullName, idMatch[0]);
+            }
+            beadsResult.created.push(fullName);
+          } catch (error: any) {
+            beadsResult.errors.push(`Failed to create "${task.name}": ${error.message}`);
+          }
+        }
+
+        if (beadsResult.created.length > 0) {
+          try {
+            execSync('bd flush', { encoding: 'utf-8', cwd: projectPath });
+          } catch {}
+        }
+
+        beadsResult.success = beadsResult.errors.length === 0;
+      }
+    } catch {
+      beadsResult.errors.push('bd (beads) CLI not found');
+    }
+
+    res.json({
+      success: true,
+      complexity: null, // Not re-analyzed
+      tasks,
+      files: {
+        state: statePath.replace(projectPath, '.'),
+        workspace: workspacePath.replace(projectPath, '.'),
+        prd: prdPath ? prdPath.replace(projectPath, '.') : undefined,
+      },
+      beads: beadsResult,
+    });
+  } catch (error: any) {
+    console.error('Error creating plan:', error);
+    res.status(500).json({ error: 'Failed to create plan: ' + error.message });
   }
 });
 
@@ -330,6 +930,31 @@ function getProjectPath(linearProjectId?: string, issuePrefix?: string): string 
   if (issuePrefix) {
     const mapping = mappings.find(m => m.linearPrefix === issuePrefix);
     if (mapping) return mapping.localPath;
+  }
+
+  // Handle GitHub issue prefixes from GITHUB_REPOS config
+  // Format: owner/repo:PREFIX or owner/repo (uses uppercase repo name)
+  if (issuePrefix) {
+    const config = getGitHubConfig();
+    if (config) {
+      for (const { owner, repo, prefix } of config.repos) {
+        // Match against prefix or uppercase repo name
+        const repoPrefix = prefix || repo.toUpperCase().replace(/-CLI$/, '').replace(/-/g, '');
+        if (repoPrefix.toUpperCase() === issuePrefix.toUpperCase()) {
+          // GitHub repos - look in ~/projects/{repo}/ or ~/projects/{owner}/{repo}/
+          const possiblePaths = [
+            join(homedir(), 'projects', repo),
+            join(homedir(), 'projects', repo.replace(/-cli$/, '')),
+            join(homedir(), 'projects', owner, repo),
+          ];
+          for (const path of possiblePaths) {
+            if (existsSync(path)) {
+              return path;
+            }
+          }
+        }
+      }
+    }
   }
 
   // Fall back to default project
@@ -1091,7 +1716,7 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
 });
 
 // Start agent for issue
-app.post('/api/agents', (req, res) => {
+app.post('/api/agents', async (req, res) => {
   const { issueId, projectId } = req.body;
 
   if (!issueId) {
@@ -1108,10 +1733,171 @@ app.post('/api/agents', (req, res) => {
       projectPath
     );
 
+    // Update issue status to "In Progress"
+    const apiKey = getLinearApiKey();
+    const isGitHubIssue = issueId.startsWith('PAN-');
+
+    if (isGitHubIssue) {
+      // GitHub issue - add "in-progress" label, remove "planned" label
+      try {
+        const number = parseInt(issueId.split('-')[1], 10);
+        const owner = 'eltmon';
+        const repo = 'panopticon-cli';
+        const token = process.env.GITHUB_TOKEN;
+
+        if (token) {
+          // Remove "planned" label if present
+          await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/planned`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `token ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+            },
+          }).catch(() => {}); // Ignore if label doesn't exist
+
+          // Add "in-progress" label
+          await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `token ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ labels: ['in-progress'] }),
+          });
+
+          console.log(`Updated ${issueId} GitHub labels to in-progress`);
+        }
+      } catch (ghError) {
+        console.error('Failed to update GitHub labels:', ghError);
+      }
+    } else if (apiKey) {
+      // It's a Linear issue, update status
+      try {
+        // First get the issue to find the team's "In Progress" state
+        const getIssueQuery = `
+          query GetIssue($id: String!) {
+            issue(id: $id) {
+              id
+              team {
+                states {
+                  nodes {
+                    id
+                    name
+                    type
+                  }
+                }
+              }
+            }
+          }
+        `;
+
+        const issueResponse = await fetch('https://api.linear.app/graphql', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': apiKey,
+          },
+          body: JSON.stringify({ query: getIssueQuery, variables: { id: issueId } }),
+        });
+
+        const issueJson = await issueResponse.json();
+        const states = issueJson.data?.issue?.team?.states?.nodes || [];
+        const inProgressState = states.find((s: any) => s.type === 'started' || s.name.toLowerCase() === 'in progress');
+
+        if (inProgressState && issueJson.data?.issue?.id) {
+          // Update the issue state
+          const updateMutation = `
+            mutation UpdateIssue($id: String!, $stateId: String!) {
+              issueUpdate(id: $id, input: { stateId: $stateId }) {
+                success
+              }
+            }
+          `;
+
+          await fetch('https://api.linear.app/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': apiKey,
+            },
+            body: JSON.stringify({
+              query: updateMutation,
+              variables: { id: issueJson.data.issue.id, stateId: inProgressState.id },
+            }),
+          });
+
+          console.log(`Updated ${issueId} status to In Progress`);
+        }
+      } catch (linearError) {
+        console.error('Failed to update Linear status:', linearError);
+        // Don't fail the request, agent was still started
+      }
+    }
+
+    // Also start containers if workspace has ./dev script
+    let containerActivityId: string | null = null;
+    const issueLower = issueId.toLowerCase();
+    const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+    const devScript = join(workspacePath, 'dev');
+
+    if (existsSync(workspacePath) && existsSync(devScript)) {
+      // Check if Docker is running
+      let dockerRunning = false;
+      try {
+        execSync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
+        dockerRunning = true;
+      } catch {
+        console.log('Docker not running, skipping container start');
+      }
+
+      if (dockerRunning) {
+        containerActivityId = `containers-${Date.now()}`;
+
+        logActivity({
+          id: containerActivityId,
+          timestamp: new Date().toISOString(),
+          command: `./dev all (${issueId})`,
+          status: 'running',
+          output: [],
+        });
+
+        const containerChild = spawn('./dev', ['all'], {
+          cwd: workspacePath,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        containerChild.stdout?.on('data', (data) => {
+          data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+            appendActivityOutput(containerActivityId!, line);
+          });
+        });
+        containerChild.stderr?.on('data', (data) => {
+          data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+            appendActivityOutput(containerActivityId!, `[stderr] ${line}`);
+          });
+        });
+
+        containerChild.on('close', (code) => {
+          appendActivityOutput(containerActivityId!, `[${new Date().toISOString()}] ./dev all exited with code ${code}`);
+          updateActivity(containerActivityId!, { status: code === 0 ? 'completed' : 'failed' });
+        });
+
+        containerChild.on('error', (err) => {
+          appendActivityOutput(containerActivityId!, `[error] ${err.message}`);
+          updateActivity(containerActivityId!, { status: 'failed' });
+        });
+
+        console.log(`Starting containers for ${issueId} in ${workspacePath}`);
+      }
+    }
+
     res.json({
       success: true,
       message: `Starting agent for ${issueId}`,
       activityId,
+      containerActivityId,
       projectPath,
     });
   } catch (error: any) {
@@ -1176,6 +1962,1500 @@ app.get('/api/skills', (_req, res) => {
     res.json([]);
   }
 });
+
+// Helper to detect if an issue ID is from GitHub
+function isGitHubIssue(issueId: string): { isGitHub: boolean; owner?: string; repo?: string; number?: number } {
+  const config = getGitHubConfig();
+  if (!config) return { isGitHub: false };
+
+  // Check if the prefix matches any configured GitHub repo
+  const prefix = issueId.split('-')[0].toUpperCase();
+  for (const { owner, repo, prefix: repoPrefix } of config.repos) {
+    const configPrefix = (repoPrefix || repo).toUpperCase();
+    if (prefix === configPrefix) {
+      const number = parseInt(issueId.split('-')[1], 10);
+      if (!isNaN(number)) {
+        return { isGitHub: true, owner, repo, number };
+      }
+    }
+  }
+
+  return { isGitHub: false };
+}
+
+// Fetch GitHub issue details
+async function fetchGitHubIssue(owner: string, repo: string, number: number): Promise<any> {
+  const config = getGitHubConfig();
+  if (!config) throw new Error('GitHub not configured');
+
+  const response = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+    {
+      headers: {
+        'Authorization': `token ${config.token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Panopticon-Dashboard',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`GitHub API error: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// Add "planning" label to GitHub issue
+async function addGitHubPlanningLabel(owner: string, repo: string, number: number): Promise<void> {
+  const config = getGitHubConfig();
+  if (!config) throw new Error('GitHub not configured');
+
+  // First, try to create the label if it doesn't exist
+  try {
+    await fetch(`https://api.github.com/repos/${owner}/${repo}/labels`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `token ${config.token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Panopticon-Dashboard',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'planning',
+        color: 'a855f7', // Purple
+        description: 'Issue is in planning/discovery phase',
+      }),
+    });
+  } catch {
+    // Label might already exist, that's fine
+  }
+
+  // Add the label to the issue
+  await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `token ${config.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'Panopticon-Dashboard',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ labels: ['planning'] }),
+  });
+}
+
+// Start planning for an issue - moves to "In Planning", creates workspace, spawns planning agent
+app.post('/api/issues/:id/start-planning', async (req, res) => {
+  const { id } = req.params;
+  const { skipWorkspace = false } = req.body;
+
+  try {
+    // Check if this is a GitHub issue
+    const githubCheck = isGitHubIssue(id);
+
+    let issue: {
+      id: string;
+      identifier: string;
+      title: string;
+      description: string;
+      url: string;
+      source: 'linear' | 'github';
+    };
+    let newStateName = 'In Planning';
+
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo && githubCheck.number) {
+      // Handle GitHub issue
+      const ghIssue = await fetchGitHubIssue(githubCheck.owner, githubCheck.repo, githubCheck.number);
+
+      // Find the prefix for this repo
+      const config = getGitHubConfig()!;
+      const repoConfig = config.repos.find(r => r.owner === githubCheck.owner && r.repo === githubCheck.repo);
+      const prefix = repoConfig?.prefix || githubCheck.repo.toUpperCase();
+
+      issue = {
+        id: `github-${githubCheck.owner}-${githubCheck.repo}-${githubCheck.number}`,
+        identifier: `${prefix}-${githubCheck.number}`,
+        title: ghIssue.title,
+        description: ghIssue.body || '',
+        url: ghIssue.html_url,
+        source: 'github',
+      };
+
+      // Add "planning" label to GitHub issue
+      await addGitHubPlanningLabel(githubCheck.owner, githubCheck.repo, githubCheck.number);
+      newStateName = 'Planning (label added)';
+
+    } else {
+      // Handle Linear issue
+      const apiKey = getLinearApiKey();
+      if (!apiKey) {
+        return res.status(500).json({ error: 'LINEAR_API_KEY not configured' });
+      }
+
+      // 1. Fetch issue details
+      const issueQuery = `
+        query GetIssue($id: String!) {
+          issue(id: $id) {
+            id
+            identifier
+            title
+            description
+            url
+            state { id name }
+            team { id key }
+          }
+        }
+      `;
+
+      const issueResponse = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey,
+        },
+        body: JSON.stringify({ query: issueQuery, variables: { id } }),
+      });
+      const issueJson = await issueResponse.json();
+      if (issueJson.errors) throw new Error(issueJson.errors[0]?.message || 'GraphQL error');
+      const linearIssue = issueJson.data?.issue;
+
+      if (!linearIssue) {
+        return res.status(404).json({ error: 'Issue not found' });
+      }
+
+      // 2. Find "In Planning" state for this team
+      const statesQuery = `
+        query GetTeamStates($teamId: String!) {
+          team(id: $teamId) {
+            states {
+              nodes {
+                id
+                name
+                type
+              }
+            }
+          }
+        }
+      `;
+
+      const statesResponse = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey,
+        },
+        body: JSON.stringify({ query: statesQuery, variables: { teamId: linearIssue.team.id } }),
+      });
+      const statesJson = await statesResponse.json();
+      if (statesJson.errors) throw new Error(statesJson.errors[0]?.message || 'GraphQL error');
+
+      const states = statesJson.data?.team?.states?.nodes || [];
+      const planningState = states.find((s: any) =>
+        s.name.toLowerCase().includes('planning') ||
+        s.name.toLowerCase() === 'planned'
+      );
+
+      if (!planningState) {
+        return res.status(400).json({
+          error: 'No "In Planning" state found in Linear. Please add it to your team workflow.',
+          hint: 'Go to Linear → Settings → Teams → Workflow → Add "In Planning" under Started',
+        });
+      }
+
+      // 3. Move issue to "In Planning" state
+      const updateMutation = `
+        mutation UpdateIssue($id: String!, $stateId: String!) {
+          issueUpdate(id: $id, input: { stateId: $stateId }) {
+            success
+            issue {
+              id
+              identifier
+              state { name }
+            }
+          }
+        }
+      `;
+
+      const updateResponse = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey,
+        },
+        body: JSON.stringify({
+          query: updateMutation,
+          variables: { id: linearIssue.id, stateId: planningState.id },
+        }),
+      });
+      const updateJson = await updateResponse.json();
+      if (updateJson.errors) throw new Error(updateJson.errors[0]?.message || 'Failed to update issue');
+
+      issue = {
+        id: linearIssue.id,
+        identifier: linearIssue.identifier,
+        title: linearIssue.title,
+        description: linearIssue.description || '',
+        url: linearIssue.url,
+        source: 'linear',
+      };
+      newStateName = planningState.name;
+    }
+
+    // 4. Create workspace (git worktree) if not skipped
+    const mappings = getProjectMappings();
+    const prefix = issue.identifier.split('-')[0];
+    const mapping = mappings.find(m => m.linearPrefix.toUpperCase() === prefix.toUpperCase());
+
+    // For GitHub issues, check if there's a mapping, otherwise use the GitHub config's local path
+    let projectPath: string;
+    if (mapping?.localPath) {
+      projectPath = mapping.localPath;
+    } else if (issue.source === 'github' && githubCheck.owner && githubCheck.repo) {
+      // Try to find local path from GitHub config
+      const localPaths = getGitHubLocalPaths();
+      projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`] || getDefaultProjectPath();
+    } else {
+      projectPath = getDefaultProjectPath();
+    }
+    const issueLower = issue.identifier.toLowerCase();
+    const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+
+    let workspaceCreated = false;
+    let workspaceError: string | undefined;
+
+    if (!skipWorkspace) {
+      try {
+        if (!existsSync(workspacePath)) {
+          // Create workspace using pan workspace create (git worktree only, no docker)
+          const activityId = Date.now().toString();
+          logActivity({
+            id: activityId,
+            timestamp: new Date().toISOString(),
+            command: `pan workspace create ${issue.identifier}`,
+            status: 'running',
+            output: [],
+          });
+
+          // Run pan workspace create
+          execSync(`pan workspace create ${issue.identifier}`, {
+            cwd: projectPath,
+            encoding: 'utf-8',
+            timeout: 60000,
+          });
+          workspaceCreated = true;
+          appendActivityOutput(activityId, 'Workspace created successfully');
+        } else {
+          workspaceCreated = true; // Already exists
+        }
+      } catch (err: any) {
+        workspaceError = err.message;
+        console.error('Workspace creation error:', err);
+      }
+    }
+
+    // 5. Spawn planning agent in tmux
+    const sessionName = `planning-${issueLower}`;
+    let planningAgentStarted = false;
+    let planningAgentError: string | undefined;
+
+    try {
+      // Kill existing planning session if any
+      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
+
+      // Create planning prompt file - store IN workspace if exists (for git-backed planning)
+      const planningDir = workspaceCreated
+        ? join(workspacePath, '.planning')
+        : join(projectPath, '.planning', issueLower);
+      if (!existsSync(planningDir)) {
+        execSync(`mkdir -p "${planningDir}"`, { encoding: 'utf-8' });
+      }
+
+      const planningPromptPath = join(planningDir, 'PLANNING_PROMPT.md');
+      const planningPrompt = `# Planning Session: ${issue.identifier}
+
+## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
+
+**YOU ARE IN PLANNING MODE. DO NOT:**
+- Write or modify any code files (except STATE.md)
+- Run implementation commands (npm install, docker compose, make, etc.)
+- Create actual features or functionality
+- Start implementing the solution
+
+**YOU SHOULD ONLY:**
+- Ask clarifying questions (use AskUserQuestion tool)
+- Explore the codebase to understand context (read files, grep)
+- Generate planning artifacts:
+  - STATE.md (decisions, approach, architecture)
+  - Beads tasks (via \`bd create\`)
+- Present options and tradeoffs for the user to decide
+
+When planning is complete, STOP and tell the user: "Planning complete - click Done when ready to hand off to an agent for implementation."
+
+---
+
+## Issue Details
+- **ID:** ${issue.identifier}
+- **Title:** ${issue.title}
+- **URL:** ${issue.url}
+
+## Description
+${issue.description || 'No description provided'}
+
+---
+
+## Your Mission
+
+You are a planning agent conducting a **discovery session** for this issue.
+
+### Phase 1: Understand Context
+1. Read the codebase to understand relevant files and patterns
+2. Identify what subsystems/files this issue affects
+3. Note any existing patterns we should follow
+
+### Phase 2: Discovery Conversation
+Use AskUserQuestion tool to ask contextual questions:
+- What's the scope? What's explicitly OUT of scope?
+- Any technical constraints or preferences?
+- What does "done" look like?
+- Are there edge cases we need to handle?
+
+### Phase 3: Generate Artifacts (NO CODE!)
+When discovery is complete:
+1. Create STATE.md with decisions made
+2. Create beads tasks with dependencies using \`bd create\`
+3. Summarize the plan and STOP
+
+**Remember:** Be a thinking partner, not an interviewer. Ask questions that help clarify.
+
+Start by exploring the codebase to understand the context, then begin the discovery conversation.
+`;
+
+      writeFileSync(planningPromptPath, planningPrompt);
+
+      // Determine working directory - use workspace if created, otherwise project root
+      const agentCwd = workspaceCreated ? workspacePath : projectPath;
+
+      // Start tmux session with Claude Code for planning
+      // Use --print with stream-json for capturable output (TUI can't be captured)
+      const outputFile = join(planningDir, 'output.jsonl');
+      const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions --print --verbose --output-format stream-json -p "${planningPromptPath}" 2>&1 | tee "${outputFile}"`;
+
+      // Ensure tmux is running before starting session
+      ensureTmuxRunning();
+      execSync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
+
+      planningAgentStarted = true;
+    } catch (err: any) {
+      planningAgentError = err.message;
+      console.error('Planning agent error:', err);
+    }
+
+    res.json({
+      success: true,
+      issue: {
+        id: issue.id,
+        identifier: issue.identifier,
+        title: issue.title,
+        newState: newStateName,
+        source: issue.source,
+      },
+      workspace: {
+        created: workspaceCreated,
+        path: workspacePath,
+        error: workspaceError,
+      },
+      planningAgent: {
+        started: planningAgentStarted,
+        sessionName: planningAgentStarted ? sessionName : undefined,
+        error: planningAgentError,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error starting planning:', error);
+    res.status(500).json({ error: 'Failed to start planning: ' + error.message });
+  }
+});
+
+// Get planning session status
+app.get('/api/planning/:issueId/status', (req, res) => {
+  const { issueId } = req.params;
+  const sessionName = `planning-${issueId.toLowerCase()}`;
+
+  try {
+    // Check if tmux session exists
+    const sessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
+      encoding: 'utf-8',
+    }).trim().split('\n').filter(Boolean);
+
+    const sessionExists = sessions.includes(sessionName);
+
+    // Read output from the streaming JSON log file (even if session ended)
+    let output = '';
+    try {
+      // Find output file - check workspace first, then legacy planning directories
+      const possibleOutputPaths: string[] = [];
+      const issueLower = issueId.toLowerCase();
+
+      // Check workspace locations first (new git-backed planning)
+      const workspaceLocations = [
+        join(homedir(), 'projects', 'panopticon', 'workspaces', `feature-${issueLower}`, '.planning', 'output.jsonl'),
+        join(homedir(), 'projects', 'myn', 'workspaces', `feature-${issueLower}`, '.planning', 'output.jsonl'),
+      ];
+      possibleOutputPaths.push(...workspaceLocations);
+
+      // Legacy planning directories (fallback)
+      possibleOutputPaths.push(
+        join(homedir(), 'projects', 'panopticon', '.planning', issueLower, 'output.jsonl'),
+        join(homedir(), 'projects', 'myn', '.planning', issueLower, 'output.jsonl'),
+      );
+
+      // Also check GitHub local paths (both workspace and legacy)
+      const githubCheck = isGitHubIssue(issueId);
+      if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+        const localPaths = getGitHubLocalPaths();
+        const projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`];
+        if (projectPath) {
+          // Workspace first
+          possibleOutputPaths.unshift(join(projectPath, 'workspaces', `feature-${issueLower}`, '.planning', 'output.jsonl'));
+          // Legacy fallback
+          possibleOutputPaths.push(join(projectPath, '.planning', issueLower, 'output.jsonl'));
+        }
+      }
+
+      for (const outputPath of possibleOutputPaths) {
+        if (existsSync(outputPath)) {
+          const planningDir = dirname(outputPath);
+
+          // Find all output files (backups + current) and read them in order
+          const allOutputFiles: string[] = [];
+          const files = readdirSync(planningDir);
+
+          // Get backup files sorted by timestamp (oldest first)
+          const backupFiles = files
+            .filter(f => f.startsWith('output-') && f.endsWith('.jsonl'))
+            .sort(); // Sorts by timestamp since format is output-{timestamp}.jsonl
+
+          for (const backup of backupFiles) {
+            allOutputFiles.push(join(planningDir, backup));
+          }
+
+          // Add current output file last
+          if (existsSync(outputPath)) {
+            allOutputFiles.push(outputPath);
+          }
+
+          // Parse all output files and combine
+          const textParts: string[] = [];
+
+          for (const filePath of allOutputFiles) {
+            // Add separator between sessions (except for first)
+            if (textParts.length > 0) {
+              textParts.push('\n\n---\n\n**Continuation:**\n\n');
+            }
+
+            const content = readFileSync(filePath, 'utf-8');
+            // Parse streaming JSON lines and extract text content
+            const lines = content.split('\n').filter(line => line.trim());
+
+            for (const line of lines) {
+              try {
+                const json = JSON.parse(line);
+                // Extract text from various message types
+                if (json.type === 'assistant' && json.message?.content) {
+                  for (const block of json.message.content) {
+                    if (block.type === 'text') {
+                      textParts.push(block.text + '\n');
+                    } else if (block.type === 'tool_use') {
+                      // Format tool use with relevant details
+                      const input = block.input || {};
+                      let detail = '';
+                      switch (block.name) {
+                        case 'Read':
+                          detail = input.file_path ? ` \`${input.file_path}\`` : '';
+                          break;
+                        case 'Bash':
+                          const cmd = input.command || '';
+                          detail = cmd ? ` \`${cmd.length > 60 ? cmd.slice(0, 60) + '...' : cmd}\`` : '';
+                          break;
+                        case 'Task':
+                          detail = input.description ? ` - ${input.description}` : '';
+                          break;
+                        case 'Edit':
+                        case 'Write':
+                          detail = input.file_path ? ` \`${input.file_path}\`` : '';
+                          break;
+                        case 'Grep':
+                          detail = input.pattern ? ` for \`${input.pattern}\`` : '';
+                          break;
+                        case 'Glob':
+                          detail = input.pattern ? ` \`${input.pattern}\`` : '';
+                          break;
+                      }
+                      textParts.push(`\n🔧 **${block.name}**${detail}\n`);
+                    }
+                  }
+                } else if (json.type === 'content_block_delta' && json.delta?.text) {
+                  textParts.push(json.delta.text);
+                } else if (json.type === 'result' && json.result) {
+                  textParts.push(`\n--- Result ---\n${json.result}\n`);
+                }
+              } catch (e) {
+                // Skip unparseable lines
+              }
+            }
+          } // End of allOutputFiles loop
+
+          output = textParts.join('');
+          break;
+        }
+      }
+
+      // If no output file found, try tmux capture as fallback
+      if (!output) {
+        output = execSync(`tmux capture-pane -t ${sessionName} -p -S -50 2>/dev/null || echo ""`, {
+          encoding: 'utf-8',
+        });
+      }
+    } catch (e) {
+      // Capture failed, leave output empty
+    }
+
+    res.json({
+      active: sessionExists,
+      sessionName,
+      recentOutput: output,
+    });
+  } catch (error: any) {
+    res.json({
+      active: false,
+      sessionName,
+      error: error.message,
+    });
+  }
+});
+
+// Send message to planning session
+app.post('/api/planning/:issueId/message', (req, res) => {
+  const { issueId } = req.params;
+  const { message } = req.body;
+  const sessionName = `planning-${issueId.toLowerCase()}`;
+
+  if (!message) {
+    return res.status(400).json({ error: 'Message required' });
+  }
+
+  try {
+    // Send message to tmux session
+    execSync(`tmux send-keys -t ${sessionName} "${message.replace(/"/g, '\\"')}"`, { encoding: 'utf-8' });
+    execSync(`tmux send-keys -t ${sessionName} Enter`, { encoding: 'utf-8' });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to send message: ' + error.message });
+  }
+});
+
+// Stop planning session (just kills tmux, doesn't revert state)
+app.delete('/api/planning/:issueId', (req, res) => {
+  const { issueId } = req.params;
+  const sessionName = `planning-${issueId.toLowerCase()}`;
+
+  try {
+    execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to stop planning: ' + error.message });
+  }
+});
+
+// Remove "planning" label from GitHub issue
+async function removeGitHubPlanningLabel(owner: string, repo: string, number: number): Promise<void> {
+  const config = getGitHubConfig();
+  if (!config) throw new Error('GitHub not configured');
+
+  await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/planning`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `token ${config.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'Panopticon-Dashboard',
+    },
+  });
+}
+
+// Continue planning - starts new session with user response as context
+app.post('/api/issues/:id/continue-planning', async (req, res) => {
+  const { id } = req.params;
+  const { response } = req.body;
+  const sessionName = `planning-${id.toLowerCase()}`;
+
+  if (!response) {
+    return res.status(400).json({ error: 'Response is required' });
+  }
+
+  try {
+    // Kill any existing session
+    try {
+      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
+    } catch (e) {
+      // Session might not exist
+    }
+
+    // Find planning directory - check workspace first, then legacy
+    const githubCheck = isGitHubIssue(id);
+    const issueLower = id.toLowerCase();
+    let projectPath = '';
+    let planningDir = '';
+    let workspacePath = '';
+
+    // Determine project path
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+      const localPaths = getGitHubLocalPaths();
+      projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`] || '';
+    } else {
+      // Linear issue - check common paths
+      const possiblePaths = [
+        join(homedir(), 'projects', 'panopticon'),
+        join(homedir(), 'projects', 'myn'),
+      ];
+      for (const p of possiblePaths) {
+        // Check workspace first
+        if (existsSync(join(p, 'workspaces', `feature-${issueLower}`, '.planning'))) {
+          projectPath = p;
+          break;
+        }
+        // Then legacy
+        if (existsSync(join(p, '.planning', issueLower))) {
+          projectPath = p;
+          break;
+        }
+      }
+    }
+
+    if (!projectPath) {
+      return res.status(404).json({ error: 'Could not find project path' });
+    }
+
+    // Check workspace planning first (git-backed)
+    workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+    const workspacePlanningDir = join(workspacePath, '.planning');
+    const legacyPlanningDir = join(projectPath, '.planning', issueLower);
+
+    if (existsSync(workspacePlanningDir)) {
+      planningDir = workspacePlanningDir;
+    } else if (existsSync(legacyPlanningDir)) {
+      planningDir = legacyPlanningDir;
+    } else {
+      return res.status(404).json({ error: 'Planning directory not found' });
+    }
+
+    const outputFile = join(planningDir, 'output.jsonl');
+
+    // Read previous output to get FULL context (including tool results)
+    let conversationLog = '';
+    if (existsSync(outputFile)) {
+      const content = readFileSync(outputFile, 'utf-8');
+      const lines = content.split('\n').filter(line => line.trim());
+      const logParts: string[] = [];
+
+      for (const line of lines) {
+        try {
+          const json = JSON.parse(line);
+
+          // Assistant messages (text and tool uses)
+          if (json.type === 'assistant' && json.message?.content) {
+            for (const block of json.message.content) {
+              if (block.type === 'text') {
+                logParts.push(`**Assistant:**\n${block.text}`);
+              } else if (block.type === 'tool_use') {
+                const input = block.input || {};
+                // Skip reads of CONTINUATION_PROMPT.md to prevent recursive nesting
+                if (block.name === 'Read' && input.file_path?.includes('CONTINUATION_PROMPT.md')) {
+                  continue;
+                }
+                let toolInfo = `**Tool: ${block.name}**`;
+                // Include key tool parameters
+                if (block.name === 'Read' && input.file_path) {
+                  toolInfo += `\nFile: ${input.file_path}`;
+                } else if (block.name === 'Bash' && input.command) {
+                  toolInfo += `\nCommand: ${input.command.slice(0, 200)}${input.command.length > 200 ? '...' : ''}`;
+                } else if (block.name === 'Grep' && input.pattern) {
+                  toolInfo += `\nPattern: ${input.pattern}`;
+                } else if (block.name === 'Task' && input.description) {
+                  toolInfo += `\nTask: ${input.description}`;
+                }
+                logParts.push(toolInfo);
+              }
+            }
+          }
+
+          // Tool results (what files contained, command outputs, etc.) - FULL content for context preservation
+          if (json.type === 'user' && json.message?.content) {
+            for (const block of json.message.content) {
+              if (block.type === 'tool_result' && block.content) {
+                const resultText = typeof block.content === 'string'
+                  ? block.content
+                  : JSON.stringify(block.content);
+                // Skip tool results that contain CONTINUATION_PROMPT content (prevents recursion)
+                if (resultText.includes('# Continuation of Planning Session:')) {
+                  continue;
+                }
+                if (resultText.trim()) {
+                  logParts.push(`**Tool Result:**\n\`\`\`\n${resultText}\n\`\`\``);
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+      conversationLog = logParts.join('\n\n');
+    }
+
+    // Create continuation prompt with full context
+    const continuationPromptPath = join(planningDir, 'CONTINUATION_PROMPT.md');
+    const continuationPrompt = `# Continuation of Planning Session: ${id.toUpperCase()}
+
+## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
+
+**YOU ARE IN PLANNING MODE. DO NOT:**
+- Write or modify any code files
+- Run implementation commands (npm install, docker, etc.)
+- Create actual features or functionality
+- Update the issue status to "In Progress"
+
+**YOU SHOULD ONLY:**
+- Ask clarifying questions
+- Explore the codebase to understand context
+- Generate planning artifacts:
+  - STATE.md (decisions and approach)
+  - Beads tasks (via \`bd create\`)
+  - Architecture diagrams or notes
+- Present options and tradeoffs for the user to decide
+
+When planning is complete, STOP and tell the user "Planning complete - click Done when ready to hand off to an agent for implementation."
+
+---
+
+## Previous Conversation
+
+${conversationLog}
+
+---
+
+## User's Response
+
+${response}
+
+---
+
+## Your Task
+
+Continue the PLANNING session. Do NOT implement anything.
+
+1. If more info is needed, ask focused questions
+2. If you have enough info, generate planning artifacts (STATE.md, beads tasks)
+3. When done, summarize and wait for user to click "Done"
+`;
+
+    writeFileSync(continuationPromptPath, continuationPrompt);
+
+    // Determine working directory (use workspace if exists)
+    const agentCwd = existsSync(workspacePath) ? workspacePath : projectPath;
+
+    // Clear old output and start new session
+    if (existsSync(outputFile)) {
+      // Backup old output
+      const backupPath = join(planningDir, `output-${Date.now()}.jsonl`);
+      renameSync(outputFile, backupPath);
+    }
+
+    const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions --print --verbose --output-format stream-json -p "${continuationPromptPath}" 2>&1 | tee "${outputFile}"`;
+
+    // Ensure tmux is running before starting session
+    ensureTmuxRunning();
+    execSync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
+
+    res.json({
+      success: true,
+      sessionName,
+      message: 'Planning session continued',
+    });
+  } catch (error: any) {
+    console.error('Error continuing planning:', error);
+    res.status(500).json({ error: 'Failed to continue planning: ' + error.message });
+  }
+});
+
+// Push planning - commit and push planning artifacts to remote
+app.post('/api/issues/:id/push-planning', (req, res) => {
+  const { id } = req.params;
+  const { message } = req.body || {};
+  const issueLower = id.toLowerCase();
+
+  try {
+    // Find workspace
+    const possibleWorkspaces = [
+      join(homedir(), 'projects', 'panopticon', 'workspaces', `feature-${issueLower}`),
+      join(homedir(), 'projects', 'myn', 'workspaces', `feature-${issueLower}`),
+    ];
+
+    // Check GitHub paths
+    const githubCheck = isGitHubIssue(id);
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+      const localPaths = getGitHubLocalPaths();
+      const projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`];
+      if (projectPath) {
+        possibleWorkspaces.unshift(join(projectPath, 'workspaces', `feature-${issueLower}`));
+      }
+    }
+
+    let workspacePath = '';
+    for (const ws of possibleWorkspaces) {
+      if (existsSync(join(ws, '.planning'))) {
+        workspacePath = ws;
+        break;
+      }
+    }
+
+    if (!workspacePath) {
+      return res.status(404).json({ error: 'No workspace with planning found' });
+    }
+
+    // Get branch name
+    const branchName = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    // Stage planning files
+    execSync('git add .planning', { cwd: workspacePath, encoding: 'utf-8' });
+
+    // Check if there are changes to commit
+    const status = execSync('git status --porcelain .planning', {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    let committed = false;
+    if (status) {
+      // Commit
+      const commitMsg = message || `Planning: ${id.toUpperCase()} - ${new Date().toISOString()}`;
+      execSync(`git commit -m "${commitMsg}"`, { cwd: workspacePath, encoding: 'utf-8' });
+      committed = true;
+    }
+
+    // Push to origin
+    execSync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
+
+    res.json({
+      success: true,
+      workspacePath,
+      branchName,
+      committed,
+      message: committed ? 'Planning committed and pushed' : 'Planning pushed (no new changes to commit)',
+    });
+  } catch (error: any) {
+    console.error('Error pushing planning:', error);
+    res.status(500).json({ error: 'Failed to push planning: ' + error.message });
+  }
+});
+
+// Sync planning - pull latest from remote before resuming
+app.post('/api/issues/:id/sync-planning', (req, res) => {
+  const { id } = req.params;
+  const issueLower = id.toLowerCase();
+
+  try {
+    // Find workspace or project path
+    const possibleWorkspaces = [
+      join(homedir(), 'projects', 'panopticon', 'workspaces', `feature-${issueLower}`),
+      join(homedir(), 'projects', 'myn', 'workspaces', `feature-${issueLower}`),
+    ];
+
+    // Check GitHub paths
+    const githubCheck = isGitHubIssue(id);
+    let projectPath = '';
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+      const localPaths = getGitHubLocalPaths();
+      projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`] || '';
+      if (projectPath) {
+        possibleWorkspaces.unshift(join(projectPath, 'workspaces', `feature-${issueLower}`));
+      }
+    } else {
+      // Try to find project path for Linear issues
+      const paths = [
+        join(homedir(), 'projects', 'panopticon'),
+        join(homedir(), 'projects', 'myn'),
+      ];
+      for (const p of paths) {
+        if (existsSync(join(p, 'workspaces', `feature-${issueLower}`))) {
+          projectPath = p;
+          break;
+        }
+      }
+    }
+
+    let workspacePath = '';
+    for (const ws of possibleWorkspaces) {
+      if (existsSync(ws)) {
+        workspacePath = ws;
+        break;
+      }
+    }
+
+    // If no workspace exists, check if remote branch exists and create workspace
+    if (!workspacePath && projectPath) {
+      const branchName = `feature/${issueLower}`;
+      try {
+        // Check if remote branch exists
+        const remoteCheck = execSync(`git ls-remote --heads origin ${branchName}`, {
+          cwd: projectPath,
+          encoding: 'utf-8',
+        }).trim();
+
+        if (remoteCheck) {
+          // Remote branch exists - create workspace from it
+          workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+          execSync(`git fetch origin ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
+          execSync(`git worktree add "${workspacePath}" origin/${branchName}`, {
+            cwd: projectPath,
+            encoding: 'utf-8',
+          });
+
+          return res.json({
+            success: true,
+            action: 'created',
+            workspacePath,
+            message: 'Created workspace from remote branch',
+            hasPlanning: existsSync(join(workspacePath, '.planning')),
+          });
+        }
+      } catch (e) {
+        // Remote branch doesn't exist, that's fine
+      }
+
+      return res.json({
+        success: true,
+        action: 'none',
+        message: 'No workspace or remote branch found',
+      });
+    }
+
+    if (!workspacePath) {
+      return res.json({
+        success: true,
+        action: 'none',
+        message: 'No workspace found',
+      });
+    }
+
+    // Workspace exists - fetch and check if behind
+    const branchName = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    execSync('git fetch origin', { cwd: workspacePath, encoding: 'utf-8' });
+
+    // Check if we're behind
+    const behindCount = execSync(`git rev-list HEAD..origin/${branchName} --count 2>/dev/null || echo "0"`, {
+      cwd: workspacePath,
+      encoding: 'utf-8',
+    }).trim();
+
+    if (parseInt(behindCount, 10) > 0) {
+      // Pull changes
+      execSync(`git pull origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
+
+      return res.json({
+        success: true,
+        action: 'pulled',
+        workspacePath,
+        branchName,
+        commitsPulled: parseInt(behindCount, 10),
+        message: `Pulled ${behindCount} commit(s) from remote`,
+        hasPlanning: existsSync(join(workspacePath, '.planning')),
+      });
+    }
+
+    res.json({
+      success: true,
+      action: 'up-to-date',
+      workspacePath,
+      branchName,
+      message: 'Already up to date',
+      hasPlanning: existsSync(join(workspacePath, '.planning')),
+    });
+  } catch (error: any) {
+    console.error('Error syncing planning:', error);
+    res.status(500).json({ error: 'Failed to sync: ' + error.message });
+  }
+});
+
+// Abort planning - reverts state to Todo and kills session
+app.post('/api/issues/:id/abort-planning', async (req, res) => {
+  const { id } = req.params;
+  const { deleteWorkspace } = req.body || {};
+  const sessionName = `planning-${id.toLowerCase()}`;
+
+  try {
+    // Check if this is a GitHub issue
+    const githubCheck = isGitHubIssue(id);
+
+    let revertedState = 'Todo';
+
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo && githubCheck.number) {
+      // GitHub: remove "planning" label
+      try {
+        await removeGitHubPlanningLabel(githubCheck.owner, githubCheck.repo, githubCheck.number);
+        revertedState = 'Todo (label removed)';
+      } catch (err) {
+        // Label might not exist, that's fine
+        console.log('Could not remove planning label:', err);
+      }
+    } else {
+      // Linear: move back to Todo state
+      const apiKey = getLinearApiKey();
+      if (apiKey) {
+        // Fetch issue to get team
+        const issueQuery = `
+          query GetIssue($id: String!) {
+            issue(id: $id) {
+              id
+              team { id }
+            }
+          }
+        `;
+
+        const issueResponse = await fetch('https://api.linear.app/graphql', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': apiKey,
+          },
+          body: JSON.stringify({ query: issueQuery, variables: { id } }),
+        });
+        const issueJson = await issueResponse.json();
+        const issue = issueJson.data?.issue;
+
+        if (issue) {
+          // Find "Todo" state for this team
+          const statesQuery = `
+            query GetTeamStates($teamId: String!) {
+              team(id: $teamId) {
+                states {
+                  nodes {
+                    id
+                    name
+                    type
+                  }
+                }
+              }
+            }
+          `;
+
+          const statesResponse = await fetch('https://api.linear.app/graphql', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': apiKey,
+            },
+            body: JSON.stringify({ query: statesQuery, variables: { teamId: issue.team.id } }),
+          });
+          const statesJson = await statesResponse.json();
+          const states = statesJson.data?.team?.states?.nodes || [];
+
+          // Find Todo/Unstarted state
+          const todoState = states.find((s: any) =>
+            s.name.toLowerCase() === 'todo' ||
+            s.name.toLowerCase() === 'to do' ||
+            s.type === 'unstarted'
+          );
+
+          if (todoState) {
+            // Move issue to Todo
+            const updateMutation = `
+              mutation UpdateIssue($id: String!, $stateId: String!) {
+                issueUpdate(id: $id, input: { stateId: $stateId }) {
+                  success
+                  issue { state { name } }
+                }
+              }
+            `;
+
+            await fetch('https://api.linear.app/graphql', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': apiKey,
+              },
+              body: JSON.stringify({
+                query: updateMutation,
+                variables: { id: issue.id, stateId: todoState.id },
+              }),
+            });
+            revertedState = todoState.name;
+          }
+        }
+      }
+    }
+
+    // Kill the tmux session
+    execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
+
+    // Optionally delete the workspace
+    let workspaceDeleted = false;
+    let workspaceError: string | undefined;
+
+    if (deleteWorkspace) {
+      try {
+        // Find the workspace path - check GitHub or Linear project mapping
+        let projectPath: string | undefined;
+
+        if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+          const localPaths = getGitHubLocalPaths();
+          projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`];
+        } else {
+          // For Linear issues, we need to find the project path
+          // Check project mappings
+          const mappingsPath = join(homedir(), '.panopticon', 'project-mappings.json');
+          if (existsSync(mappingsPath)) {
+            const mappings = JSON.parse(readFileSync(mappingsPath, 'utf-8'));
+            // Try to match by issue prefix (e.g., MIN-123 -> MIN)
+            const prefix = id.split('-')[0];
+            const mapping = mappings.find((m: any) => m.linearPrefix === prefix);
+            if (mapping) {
+              projectPath = mapping.localPath;
+            }
+          }
+        }
+
+        if (projectPath) {
+          const workspacePath = join(projectPath, 'workspaces', id.toLowerCase());
+
+          if (existsSync(workspacePath)) {
+            // Remove the git worktree
+            execSync(`git worktree remove "${workspacePath}" --force`, {
+              cwd: projectPath,
+              encoding: 'utf-8',
+            });
+            workspaceDeleted = true;
+          } else {
+            workspaceError = 'Workspace not found';
+          }
+        } else {
+          workspaceError = 'Could not determine project path';
+        }
+      } catch (err: any) {
+        workspaceError = err.message;
+        console.error('Error deleting workspace:', err);
+      }
+    }
+
+    res.json({
+      success: true,
+      issueId: id,
+      revertedState,
+      sessionKilled: true,
+      workspaceDeleted,
+      workspacePreserved: !deleteWorkspace && !workspaceDeleted,
+      workspaceError,
+    });
+  } catch (error: any) {
+    console.error('Error aborting planning:', error);
+    res.status(500).json({ error: 'Failed to abort planning: ' + error.message });
+  }
+});
+
+// Complete planning - move issue to "Planned" state
+app.post('/api/issues/:id/complete-planning', async (req, res) => {
+  const { id } = req.params;
+  const sessionName = `planning-${id.toLowerCase()}`;
+  const issueLower = id.toLowerCase();
+
+  try {
+    // Kill any running planning session
+    try {
+      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
+    } catch (e) {
+      // Session might not exist
+    }
+
+    // Find planning directory and commit/push
+    const githubCheck = isGitHubIssue(id);
+    let projectPath = '';
+    let planningDir = '';
+
+    // Determine project path
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+      const localPaths = getGitHubLocalPaths();
+      projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`] || '';
+    } else {
+      // Linear issue - check common paths
+      const possiblePaths = [
+        join(homedir(), 'projects', 'panopticon'),
+        join(homedir(), 'projects', 'myn'),
+      ];
+      for (const p of possiblePaths) {
+        // Check workspace first
+        if (existsSync(join(p, 'workspaces', `feature-${issueLower}`, '.planning'))) {
+          projectPath = p;
+          break;
+        }
+        // Then legacy
+        if (existsSync(join(p, '.planning', issueLower))) {
+          projectPath = p;
+          break;
+        }
+      }
+    }
+
+    // Git commit and push if planning dir exists
+    let gitPushed = false;
+    if (projectPath) {
+      const workspacePlanningDir = join(projectPath, 'workspaces', `feature-${issueLower}`, '.planning');
+      const legacyPlanningDir = join(projectPath, '.planning', issueLower);
+
+      if (existsSync(workspacePlanningDir)) {
+        planningDir = workspacePlanningDir;
+      } else if (existsSync(legacyPlanningDir)) {
+        planningDir = legacyPlanningDir;
+      }
+
+      if (planningDir) {
+        try {
+          // Get the git root (workspace or project root)
+          const gitRoot = planningDir.includes('/workspaces/')
+            ? join(projectPath, 'workspaces', `feature-${issueLower}`)
+            : projectPath;
+
+          // Git add planning and beads directories
+          execSync(`git add .planning/`, { cwd: gitRoot, encoding: 'utf-8' });
+          // Also add .beads/ if it exists (planning may create beads tasks)
+          if (existsSync(join(gitRoot, '.beads'))) {
+            execSync(`git add .beads/`, { cwd: gitRoot, encoding: 'utf-8' });
+          }
+
+          // Check if there are changes to commit
+          try {
+            execSync(`git diff --cached --quiet`, { cwd: gitRoot, encoding: 'utf-8' });
+            // No changes to commit
+          } catch (diffErr) {
+            // There are changes, commit them
+            execSync(`git commit -m "Complete planning for ${id}"`, { cwd: gitRoot, encoding: 'utf-8' });
+          }
+
+          // Push to remote
+          execSync(`git push`, { cwd: gitRoot, encoding: 'utf-8' });
+          gitPushed = true;
+        } catch (gitErr) {
+          console.error('Git commit/push failed:', gitErr);
+          // Continue even if git fails
+        }
+      }
+    }
+
+    // Update issue state (Linear or GitHub)
+    let newState = 'Planned';
+
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo && githubCheck.number) {
+      // GitHub: Remove "planning" label, add "planned" label
+      const config = getGitHubConfig();
+      if (config) {
+        try {
+          // Remove planning label
+          await fetch(`https://api.github.com/repos/${githubCheck.owner}/${githubCheck.repo}/issues/${githubCheck.number}/labels/planning`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `token ${config.token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Panopticon-Dashboard',
+            },
+          });
+        } catch (e) {}
+
+        try {
+          // Add planned label
+          await fetch(`https://api.github.com/repos/${githubCheck.owner}/${githubCheck.repo}/issues/${githubCheck.number}/labels`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `token ${config.token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Panopticon-Dashboard',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ labels: ['planned'] }),
+          });
+        } catch (e) {}
+      }
+    } else {
+      // Linear: Update to "Planned" state
+      const apiKey = getLinearApiKey();
+      if (apiKey) {
+        // First, get the issue to find its team
+        const issueQuery = `query { issue(id: "${id}") { id team { id states { nodes { id name } } } } }`;
+        const issueRes = await fetch('https://api.linear.app/graphql', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': apiKey,
+          },
+          body: JSON.stringify({ query: issueQuery }),
+        });
+        const issueData = await issueRes.json();
+        const issue = issueData.data?.issue;
+
+        if (issue) {
+          // Find "Planned" state or fall back to first available state after "In Planning"
+          const states = issue.team?.states?.nodes || [];
+          let plannedState = states.find((s: any) => s.name === 'Planned');
+          if (!plannedState) {
+            plannedState = states.find((s: any) => s.name === 'Ready');
+          }
+          if (!plannedState) {
+            plannedState = states.find((s: any) => s.name === 'Todo');
+          }
+
+          if (plannedState) {
+            const updateMutation = `mutation { issueUpdate(id: "${issue.id}", input: { stateId: "${plannedState.id}" }) { success issue { state { name } } } }`;
+            const updateRes = await fetch('https://api.linear.app/graphql', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': apiKey,
+              },
+              body: JSON.stringify({ query: updateMutation }),
+            });
+            const updateData = await updateRes.json();
+            newState = updateData.data?.issueUpdate?.issue?.state?.name || 'Planned';
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      issueId: id,
+      newState,
+      gitPushed,
+      message: gitPushed
+        ? 'Planning complete and pushed to git - ready for execution'
+        : 'Planning complete - ready for execution',
+    });
+  } catch (error: any) {
+    console.error('Error completing planning:', error);
+    res.status(500).json({ error: 'Failed to complete planning: ' + error.message });
+  }
+});
+
+// Get beads tasks for an issue
+app.get('/api/issues/:id/beads', (req, res) => {
+  const { id } = req.params;
+  const issueLower = id.toLowerCase();
+
+  try {
+    // Find project path
+    const githubCheck = isGitHubIssue(id);
+    let projectPath = '';
+
+    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
+      const localPaths = getGitHubLocalPaths();
+      projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`] || '';
+    } else {
+      const possiblePaths = [
+        join(homedir(), 'projects', 'panopticon'),
+        join(homedir(), 'projects', 'myn'),
+      ];
+      for (const p of possiblePaths) {
+        if (existsSync(join(p, 'workspaces', `feature-${issueLower}`)) || existsSync(join(p, '.beads'))) {
+          projectPath = p;
+          break;
+        }
+      }
+    }
+
+    if (!projectPath) {
+      return res.json({ tasks: [], message: 'No project found' });
+    }
+
+    // Read STATE.md to get beads IDs created during planning
+    const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+    const statePath = join(workspacePath, '.planning', 'STATE.md');
+    const beadsIds: string[] = [];
+
+    if (existsSync(statePath)) {
+      const stateContent = readFileSync(statePath, 'utf-8');
+      // Extract beads IDs from STATE.md (format: `panopticon-xxx` or similar)
+      const idMatches = stateContent.match(/`([a-z]+-[a-z0-9]+)`/g) || [];
+      for (const match of idMatches) {
+        const beadsId = match.replace(/`/g, '');
+        if (beadsId.includes('-') && !beadsId.includes('/')) {
+          beadsIds.push(beadsId);
+        }
+      }
+    }
+
+    // Check both workspace beads and main project beads
+    const beadsPaths = [
+      join(workspacePath, '.beads', 'issues.jsonl'),
+      join(projectPath, '.beads', 'issues.jsonl'),
+    ];
+
+    const tasks: any[] = [];
+    const seenIds = new Set<string>();
+
+    for (const issuesFile of beadsPaths) {
+      if (!existsSync(issuesFile)) continue;
+
+      const content = readFileSync(issuesFile, 'utf-8');
+      const lines = content.split('\n').filter(line => line.trim());
+
+      for (const line of lines) {
+        try {
+          const issue = JSON.parse(line);
+          // Skip if already seen
+          if (seenIds.has(issue.id)) continue;
+
+          // Include if: ID is in our beadsIds list, OR tagged with issue identifier
+          const tags = issue.tags || [];
+          const matchesTag = tags.some((t: string) =>
+            t.toLowerCase() === issueLower || t.toLowerCase() === id.toLowerCase()
+          );
+          const matchesBeadsId = beadsIds.includes(issue.id);
+
+          if (matchesTag || matchesBeadsId) {
+            seenIds.add(issue.id);
+            tasks.push({
+              id: issue.id,
+              title: issue.title,
+              status: issue.status,
+              type: issue.issue_type || issue.type,
+              blockedBy: issue.blocked_by || [],
+              createdAt: issue.created_at,
+            });
+          }
+        } catch (e) {
+          // Skip malformed lines
+        }
+      }
+    }
+
+    // Sort by creation date
+    tasks.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    res.json({
+      tasks,
+      workspacePath,
+      count: tasks.length,
+    });
+  } catch (error: any) {
+    console.error('Error fetching beads:', error);
+    res.status(500).json({ error: 'Failed to fetch beads: ' + error.message });
+  }
+});
+
+// Ensure tmux is running at startup
+ensureTmuxRunning();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Panopticon API server running on http://0.0.0.0:${PORT}`);

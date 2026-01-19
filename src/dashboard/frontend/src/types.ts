@@ -5,6 +5,8 @@ export interface LinearProject {
   icon?: string;
 }
 
+export type IssueSource = 'linear' | 'github' | 'gitlab' | 'jira';
+
 export interface Issue {
   id: string;
   identifier: string;
@@ -21,6 +23,8 @@ export interface Issue {
   createdAt: string;
   updatedAt: string;
   project?: LinearProject;
+  source?: IssueSource;
+  sourceRepo?: string;
 }
 
 export interface GitStatus {
@@ -61,11 +65,30 @@ export interface Skill {
   description?: string;
 }
 
-export type IssueStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done';
+// Panopticon's canonical states (richer than most trackers)
+export type CanonicalState =
+  | 'backlog'
+  | 'todo'
+  | 'planning'      // NEW: Human + AI discovery phase
+  | 'in_progress'
+  | 'in_review'
+  | 'done'
+  | 'canceled';
 
-export const STATUS_ORDER: IssueStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done'];
+// For backward compatibility
+export type IssueStatus = CanonicalState;
 
-export const STATUS_LABELS: Record<string, IssueStatus> = {
+export const STATUS_ORDER: CanonicalState[] = [
+  'backlog',
+  'todo',
+  'planning',       // NEW: Between todo and in_progress
+  'in_progress',
+  'in_review',
+  'done'
+];
+
+// Map tracker state names to canonical states
+export const STATUS_LABELS: Record<string, CanonicalState> = {
   // Backlog states
   'Backlog': 'backlog',
   'Triage': 'backlog',
@@ -76,6 +99,12 @@ export const STATUS_LABELS: Record<string, IssueStatus> = {
   'To Do': 'todo',
   'Ready': 'todo',
   'Unstarted': 'todo',
+
+  // Planning states (NEW)
+  'In Planning': 'planning',
+  'Planning': 'planning',
+  'Planned': 'planning',       // Linear Project status name
+  'Discovery': 'planning',
 
   // In Progress states
   'In Progress': 'in_progress',
@@ -92,7 +121,43 @@ export const STATUS_LABELS: Record<string, IssueStatus> = {
   'Done': 'done',
   'Completed': 'done',
   'Closed': 'done',
-  'Canceled': 'done',
-  'Cancelled': 'done',
-  'Duplicate': 'done',
+
+  // Canceled states (separate from done)
+  'Canceled': 'canceled',
+  'Cancelled': 'canceled',
+  'Duplicate': 'canceled',
+  'Won\'t Do': 'canceled',
+  'Wontfix': 'canceled',
 };
+
+// State type categories (from Linear)
+export type StateType = 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled';
+
+export const STATE_TYPE_MAP: Record<CanonicalState, StateType> = {
+  backlog: 'backlog',
+  todo: 'unstarted',
+  planning: 'started',
+  in_progress: 'started',
+  in_review: 'started',
+  done: 'completed',
+  canceled: 'canceled',
+};
+
+// Panopticon's virtual state tracking
+export interface PanopticonIssueState {
+  issueId: string;
+  panopticonState: CanonicalState;  // Our canonical state
+  trackerState: string;              // What's in the tracker
+  lastSyncedAt: string;
+  syncStatus: 'synced' | 'pending' | 'conflict';
+  fallbacksUsed: string[];           // e.g., ["label:planning"]
+}
+
+// State transition result
+export interface StateTransitionResult {
+  success: boolean;
+  panopticonState: CanonicalState;
+  trackerState: string;
+  fallbacksUsed: string[];
+  warnings: string[];
+}

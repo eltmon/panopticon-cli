@@ -1,0 +1,29 @@
+# Panopticon Traefik Reverse Proxy
+# This file is managed by Panopticon - changes will be overwritten on update
+
+services:
+  traefik:
+    image: traefik:v3.2
+    container_name: panopticon-traefik
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - ./certs:/etc/traefik/certs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.pan.localhost`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+
+networks:
+  default:
+    name: panopticon-network
+    external: false

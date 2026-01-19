@@ -11,8 +11,29 @@ import {
   Square,
   Send,
   RefreshCw,
+  Box,
+  Database,
+  Globe,
+  Play,
+  Loader2,
 } from 'lucide-react';
 import { Agent } from '../types';
+
+interface ContainerStatus {
+  running: boolean;
+  uptime: string | null;
+}
+
+interface WorkspaceInfo {
+  exists: boolean;
+  issueId: string;
+  path?: string;
+  frontendUrl?: string;
+  apiUrl?: string;
+  containers?: Record<string, ContainerStatus> | null;
+  hasDocker?: boolean;
+  canContainerize?: boolean;
+}
 
 // Clipboard helper that works without HTTPS
 function copyToClipboard(text: string): boolean {
@@ -42,6 +63,7 @@ function copyToClipboard(text: string): boolean {
 
 interface WorkspacePanelProps {
   agent: Agent;
+  issueId: string;
   issueUrl?: string;
   onClose: () => void;
 }
@@ -53,20 +75,79 @@ async function fetchOutput(agentId: string): Promise<string> {
   return data.output || '';
 }
 
-export function WorkspacePanel({ agent, issueUrl, onClose }: WorkspacePanelProps) {
+export function WorkspacePanel({ agent, issueId, issueUrl, onClose }: WorkspacePanelProps) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState('');
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'logs' | 'status'>('logs');
   const terminalRef = useRef<HTMLPreElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
 
   const tmuxCommand = `tmux attach -t ${agent.id}`;
 
   const { data: output, refetch } = useQuery({
     queryKey: ['agent-output', agent.id],
     queryFn: () => fetchOutput(agent.id),
-    refetchInterval: 2000,
+    refetchInterval: 1000, // Faster refresh for better tailing
   });
+
+  // Fetch workspace info for container status
+  const { data: workspace } = useQuery<WorkspaceInfo>({
+    queryKey: ['workspace', issueId],
+    queryFn: async () => {
+      const res = await fetch(`/api/workspaces/${issueId}`);
+      if (!res.ok) throw new Error('Failed to fetch workspace info');
+      return res.json();
+    },
+    refetchInterval: 5000, // Check for container changes
+  });
+
+  const startContainersMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/workspaces/${issueId}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to start containers');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['workspace', issueId] });
+      }, 5000);
+    },
+  });
+
+  const containerizeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/workspaces/${issueId}/containerize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to containerize workspace');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['workspace', issueId] });
+      }, 3000);
+    },
+  });
+
+  const handleStartContainers = () => {
+    startContainersMutation.mutate();
+  };
+
+  const handleContainerize = () => {
+    containerizeMutation.mutate();
+  };
 
   const sendMutation = useMutation({
     mutationFn: async (msg: string) => {
@@ -100,27 +181,22 @@ export function WorkspacePanel({ agent, issueUrl, onClose }: WorkspacePanelProps
     setTimeout(() => setCopied(false), 2000);
   }, [tmuxCommand]);
 
-  const scrollToBottom = useCallback(() => {
+  // Auto-scroll to bottom when new output arrives
+  useEffect(() => {
+    if (autoScroll && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [output, autoScroll]);
+
+  // Detect if user scrolled up (disable auto-scroll)
+  const handleScroll = useCallback(() => {
     if (terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+      const { scrollTop, scrollHeight, clientHeight } = terminalRef.current;
+      // If scrolled near bottom (within 50px), enable auto-scroll
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+      setAutoScroll(isNearBottom);
     }
   }, []);
-
-  useEffect(() => {
-    if (output) {
-      scrollToBottom();
-    }
-  }, [output, scrollToBottom]);
-
-  useEffect(() => {
-    scrollToBottom();
-    const timer1 = setTimeout(scrollToBottom, 50);
-    const timer2 = setTimeout(scrollToBottom, 150);
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-    };
-  }, [agent.id, scrollToBottom]);
 
   const handleSend = () => {
     if (message.trim()) {
@@ -236,6 +312,151 @@ export function WorkspacePanel({ agent, issueUrl, onClose }: WorkspacePanelProps
           </div>
         </div>
 
+        {/* Service URLs */}
+        {workspace?.hasDocker && (workspace?.frontendUrl || workspace?.apiUrl) && (
+          <div className="px-3 py-2 border-b border-gray-700 text-xs">
+            <div className="text-gray-500 uppercase tracking-wider mb-2">Services</div>
+            <div className="space-y-1.5">
+              {workspace.frontendUrl && (
+                <a
+                  href={workspace.frontendUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-blue-400 hover:text-blue-300"
+                >
+                  <Globe className="w-3 h-3" />
+                  <span>Frontend</span>
+                </a>
+              )}
+              {workspace.apiUrl && (
+                <a
+                  href={workspace.apiUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-blue-400 hover:text-blue-300"
+                >
+                  <Globe className="w-3 h-3" />
+                  <span>API</span>
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Container Controls - Start containers button when not running */}
+        {workspace?.hasDocker && (!workspace.containers || !Object.values(workspace.containers).some(c => c.running)) && (
+          <div className="px-3 py-2 border-b border-gray-700">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-yellow-500">Containers not running</span>
+              <button
+                onClick={handleStartContainers}
+                disabled={startContainersMutation.isPending}
+                className="flex items-center gap-1 px-2 py-1 bg-green-600 hover:bg-green-500 disabled:bg-green-800 text-white text-xs rounded transition-colors"
+              >
+                {startContainersMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Starting...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3 h-3" />
+                    Start Containers
+                  </>
+                )}
+              </button>
+            </div>
+            {startContainersMutation.isError && (
+              <div className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded mt-2">
+                {startContainersMutation.error instanceof Error
+                  ? startContainersMutation.error.message
+                  : 'Failed to start containers'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Git-only workspace - offer containerize option or show status */}
+        {workspace?.exists && !workspace.hasDocker && (
+          <div className="px-3 py-2 border-b border-gray-700">
+            <div className="text-gray-500 uppercase tracking-wider text-xs mb-2">Containers</div>
+            {workspace.canContainerize ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">Git-only workspace</span>
+                  <button
+                    onClick={handleContainerize}
+                    disabled={containerizeMutation.isPending}
+                    className="flex items-center gap-1 px-2 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-xs rounded transition-colors"
+                  >
+                    {containerizeMutation.isPending ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Setting up...
+                      </>
+                    ) : (
+                      <>
+                        <Box className="w-3 h-3" />
+                        Containerize
+                      </>
+                    )}
+                  </button>
+                </div>
+                {containerizeMutation.isError && (
+                  <div className="text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded">
+                    {containerizeMutation.error instanceof Error
+                      ? containerizeMutation.error.message
+                      : 'Failed to containerize workspace'}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400 bg-gray-800 px-2 py-2 rounded">
+                <span className="text-gray-500">No Docker support.</span> This workspace doesn't have container infrastructure set up yet.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Container Status - show when containers exist */}
+        {workspace?.containers && Object.keys(workspace.containers).length > 0 && (
+          <div className="px-3 py-2 border-b border-gray-700 text-xs">
+            <div className="text-gray-500 uppercase tracking-wider mb-2">Containers</div>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(workspace.containers).map(([name, status]) => {
+                const isStarting = startContainersMutation.isPending && !status.running;
+                return (
+                  <span
+                    key={name}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] ${
+                      status.running
+                        ? 'bg-green-900/30 text-green-400'
+                        : isStarting
+                        ? 'bg-yellow-900/30 text-yellow-400 animate-pulse'
+                        : 'bg-gray-700 text-gray-500'
+                    }`}
+                  >
+                    {isStarting ? (
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                    ) : name === 'postgres' || name === 'redis' ? (
+                      <Database className="w-2.5 h-2.5" />
+                    ) : (
+                      <Box className="w-2.5 h-2.5" />
+                    )}
+                    {name}
+                    {status.running && status.uptime && (
+                      <span className="text-gray-400 ml-1">{status.uptime}</span>
+                    )}
+                    {isStarting && (
+                      <span className="text-yellow-500 ml-1">starting...</span>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Tmux attach command */}
         <div className="px-3 py-2 border-b border-gray-700 text-xs">
           <div className="text-gray-500 uppercase tracking-wider mb-2">Attach Command</div>
@@ -322,9 +543,11 @@ export function WorkspacePanel({ agent, issueUrl, onClose }: WorkspacePanelProps
           <>
             <pre
               ref={terminalRef}
+              onScroll={handleScroll}
               className="flex-1 min-h-0 overflow-auto p-3 bg-gray-900 text-gray-200 font-mono text-xs leading-relaxed m-0 whitespace-pre"
             >
               {output || 'Connecting to agent...'}
+              <div ref={bottomRef} />
             </pre>
 
             {/* Input */}

@@ -148,6 +148,65 @@ pan work hook mail agent-min-123 "Review feedback received"
 
 ### Workspace Management
 
+**Workspaces are git worktrees** - isolated working directories for each issue/feature. Each workspace:
+- Has its own feature branch (e.g., `feature/min-123-add-login`)
+- Shares git history with the main repo (no separate clone)
+- Can run independently (separate node_modules, builds, etc.)
+- Is located at `{project}/workspaces/{issue-id}/`
+
+This allows multiple agents to work on different features simultaneously without conflicts.
+
+#### Git-Backed Collaborative Planning
+
+Planning artifacts are stored **inside the workspace**, making them part of the feature branch:
+
+```
+workspaces/feature-min-123/
+├── .planning/
+│   ├── output.jsonl          # Full conversation history (tool uses + results)
+│   ├── PLANNING_PROMPT.md    # Initial planning prompt
+│   ├── CONTINUATION_PROMPT.md # Context for continued sessions
+│   └── output-*.jsonl        # Backup of previous rounds
+└── ... (code)
+```
+
+**This enables:**
+
+1. **Collaborative async planning** - Push your branch, someone else pulls and continues the planning session with full context
+2. **Context recovery** - If Claude's context compacts, the full conversation is preserved in the branch
+3. **Audit trail** - See how planning decisions were made, what files were explored, what questions were asked
+4. **Branch portability** - The planning state travels with the feature branch
+
+**Dashboard workflow (recommended):**
+
+The planning dialog has **Pull** and **Push** buttons that handle git operations automatically:
+
+| Button | What it does |
+|--------|--------------|
+| **Pull** | Fetches from origin, creates workspace from remote branch if needed, pulls latest changes |
+| **Push** | Commits `.planning/` artifacts and pushes to origin |
+
+1. Person A starts planning in dashboard, clicks **Push** when interrupted
+2. Person B opens same issue in dashboard, clicks **Pull** → gets Person A's full context
+3. Person B continues the planning session and clicks **Push** when done
+
+**CLI workflow:**
+```bash
+# Person A starts planning
+pan work plan MIN-123
+# ... answers discovery questions, gets interrupted ...
+
+# Push the branch (includes planning context)
+cd workspaces/feature-min-123
+git add .planning && git commit -m "WIP: planning session"
+git push origin feature/min-123
+
+# Person B continues
+git pull origin feature/min-123
+pan work plan MIN-123 --continue
+# Claude has full context from Person A's session
+```
+
 ```bash
 # Create a workspace (git worktree) without starting an agent
 pan workspace create MIN-123
@@ -247,6 +306,61 @@ Skills are synced to all supported AI tools via symlinks:
 ~/.codex/skills/         # Codex
 ~/.gemini/skills/        # Gemini CLI
 ```
+
+## PRD Convention
+
+Panopticon enforces a standard approach to Product Requirements Documents (PRDs) across all managed projects.
+
+### PRD Structure
+
+Every project has a **canonical PRD** that defines the core product:
+
+```
+{project}/
+├── docs/
+│   └── PRD.md              # The canonical PRD (core product definition)
+├── workspaces/
+│   └── feature-{issue}/
+│       └── docs/
+│           └── {ISSUE}-plan.md   # Feature PRD (lives in feature branch)
+```
+
+| PRD Type | Location | Purpose |
+|----------|----------|---------|
+| **Canonical PRD** | `docs/PRD.md` | Core product definition, always on main |
+| **Feature PRD** | `workspaces/feature-{issue}/docs/{ISSUE}-plan.md` | Feature spec, lives in feature branch, merged with PR |
+
+### Feature PRDs Live in Workspaces
+
+When you start planning an issue, Panopticon creates:
+1. A git worktree (workspace) for the feature branch
+2. A planning session that generates a feature PRD
+
+The feature PRD **lives in the workspace** (feature branch) because:
+- It gets merged with the PR (documentation travels with code)
+- If you abort planning and delete the workspace, you don't want orphaned PRDs
+- Clean separation - each feature is self-contained
+
+### Project Initialization
+
+When registering a new project with Panopticon (`pan project add`), the system will:
+
+1. **Check for existing PRD** - Look for `docs/PRD.md`, `PRD.md`, `README.md`, or similar
+2. **If found**: Use it to create/update the canonical PRD format, prompting for any missing crucial information
+3. **If not found**: Generate one by:
+   - Analyzing the codebase structure
+   - Identifying key technologies and patterns
+   - Asking discovery questions about the product
+
+This ensures every Panopticon-managed project has a well-defined canonical PRD that agents can reference.
+
+### PRD Naming Convention
+
+| Document | Naming | Example |
+|----------|--------|---------|
+| Canonical PRD | `PRD.md` | `docs/PRD.md` |
+| Feature PRD | `{ISSUE}-plan.md` | `MIN-123-plan.md`, `PAN-4-plan.md` |
+| Planning artifacts | In `.planning/{issue}/` | `.planning/min-123/STATE.md` |
 
 ## Architecture
 

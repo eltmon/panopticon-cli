@@ -1,0 +1,42 @@
+# Panopticon Traefik Static Configuration
+# This file is managed by Panopticon - changes will be overwritten on update
+
+# API and Dashboard
+api:
+  dashboard: true
+  insecure: false
+
+# Entry Points
+entryPoints:
+  websecure:
+    address: ":443"
+
+# Providers
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: panopticon-network
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+# TLS Configuration
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/localhost.pem
+        keyFile: /etc/traefik/certs/localhost-key.pem
+
+# Logging
+log:
+  level: INFO
+  format: common
+
+accessLog:
+  filePath: ""
+  format: common
+  filters:
+    statusCodes:
+      - "400-599"

@@ -1,0 +1,35 @@
+# Panopticon Dashboard Routing
+# Routes requests to the Panopticon dashboard running on the host
+
+http:
+  routers:
+    # Main dashboard frontend
+    panopticon-frontend:
+      rule: "Host(`pan.localhost`)"
+      entryPoints:
+        - websecure
+      service: panopticon-frontend
+      tls: {}
+      priority: 10
+
+    # API routes (higher priority than frontend)
+    panopticon-api:
+      rule: "Host(`pan.localhost`) && PathPrefix(`/api`)"
+      entryPoints:
+        - websecure
+      service: panopticon-api
+      tls: {}
+      priority: 20
+
+  services:
+    panopticon-frontend:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3001"
+        passHostHeader: true
+
+    panopticon-api:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3002"
+        passHostHeader: true

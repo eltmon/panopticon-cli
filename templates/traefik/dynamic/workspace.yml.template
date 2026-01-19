@@ -1,0 +1,34 @@
+# Workspace Routing Template
+# This template is used to generate dynamic configs for workspaces
+# Variables: {{WORKSPACE_NAME}}, {{PROJECT_NAME}}, {{FRONTEND_PORT}}, {{API_PORT}}
+
+http:
+  routers:
+    # Workspace frontend
+    {{WORKSPACE_NAME}}-frontend:
+      rule: "Host(`{{WORKSPACE_NAME}}.{{PROJECT_NAME}}.localhost`)"
+      entryPoints:
+        - websecure
+      service: {{WORKSPACE_NAME}}-frontend
+      tls: {}
+
+    # Workspace API (if API port is specified)
+    {{WORKSPACE_NAME}}-api:
+      rule: "Host(`api-{{WORKSPACE_NAME}}.{{PROJECT_NAME}}.localhost`)"
+      entryPoints:
+        - websecure
+      service: {{WORKSPACE_NAME}}-api
+      tls: {}
+
+  services:
+    {{WORKSPACE_NAME}}-frontend:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:{{FRONTEND_PORT}}"
+        passHostHeader: true
+
+    {{WORKSPACE_NAME}}-api:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:{{API_PORT}}"
+        passHostHeader: true
