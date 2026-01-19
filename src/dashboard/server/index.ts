@@ -891,6 +891,15 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
     });
   }
 
+  // Check if Docker is running (required for containerization)
+  try {
+    execSync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
+  } catch {
+    return res.status(400).json({
+      error: 'Docker is not running. Start Docker Desktop first.',
+    });
+  }
+
   try {
     // First, remove the git-only workspace if it exists
     // The new-feature script will create a proper containerized one
@@ -906,7 +915,15 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
     // Extract just the issue identifier (e.g., "min-645" from "MIN-645")
     const featureName = issueLower;
     const activityId = Date.now().toString();
-    const startTime = new Date();
+
+    // Add to activity log immediately as running
+    logActivity({
+      id: activityId,
+      timestamp: new Date().toISOString(),
+      command: `./new-feature ${featureName}`,
+      status: 'running',
+      output: [],
+    });
 
     // Spawn the new-feature script
     const child = spawn('./new-feature', [featureName], {
@@ -915,42 +932,25 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    let output = '';
     child.stdout?.on('data', (data) => {
-      output += data.toString();
+      data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+        appendActivityOutput(activityId, line);
+      });
     });
     child.stderr?.on('data', (data) => {
-      output += data.toString();
+      data.toString().split('\n').filter(Boolean).forEach((line: string) => {
+        appendActivityOutput(activityId, `[stderr] ${line}`);
+      });
     });
 
     child.on('close', (code) => {
-      const endTime = new Date();
-      const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
-      activityLog.unshift({
-        id: activityId,
-        command: `./new-feature ${featureName}`,
-        description: `Containerize workspace for ${issueId}`,
-        status: code === 0 ? 'completed' : 'failed',
-        startTime: startTime.toISOString(),
-        endTime: endTime.toISOString(),
-        duration,
-        output: output.slice(-5000), // Keep last 5KB
-        projectPath: join(projectPath, 'infra'),
-      });
-      // Trim log to last 100 entries
-      if (activityLog.length > 100) {
-        activityLog.length = 100;
-      }
+      appendActivityOutput(activityId, `[${new Date().toISOString()}] Process exited with code ${code}`);
+      updateActivity(activityId, { status: code === 0 ? 'completed' : 'failed' });
     });
 
-    // Add to activity log immediately as running
-    activityLog.unshift({
-      id: activityId,
-      command: `./new-feature ${featureName}`,
-      description: `Containerize workspace for ${issueId}`,
-      status: 'running',
-      startTime: startTime.toISOString(),
-      projectPath: join(projectPath, 'infra'),
+    child.on('error', (err) => {
+      appendActivityOutput(activityId, `[error] ${err.message}`);
+      updateActivity(activityId, { status: 'failed' });
     });
 
     res.json({
