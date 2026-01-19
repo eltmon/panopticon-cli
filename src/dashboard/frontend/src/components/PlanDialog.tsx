@@ -251,6 +251,14 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
     }
   }, [statusQuery.data?.recentOutput]);
 
+  // Auto-switch to viewing when session ends while in planning step
+  useEffect(() => {
+    if (step === 'planning' && statusQuery.data && !statusQuery.data.active && statusQuery.data.recentOutput) {
+      // Session ended but we have output - switch to viewing
+      setStep('viewing');
+    }
+  }, [step, statusQuery.data]);
+
   // Reset state when dialog closes
   useEffect(() => {
     if (!isOpen) {
