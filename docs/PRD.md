@@ -2268,17 +2268,31 @@ Each project uses **one issue tracker**. This keeps things simple and avoids con
 path = "/home/user/projects/myn"
 tracker = "linear"
 linear_team = "MIN"
+default_branch = "main"           # Branch to base feature branches on
+workspace_type = "monorepo"       # "monorepo" | "simple"
+workspace_subdirs = ["fe", "api"] # For monorepo: subdirs that are worktrees
 
 [projects.panopticon]
 path = "/home/user/projects/panopticon"
 tracker = "linear"
 linear_team = "PAN"
+default_branch = "main"
 
 [projects.opensource-lib]
 path = "/home/user/projects/mylib"
 tracker = "github"
 github_repo = "user/mylib"
+default_branch = "main"
 ```
+
+**Workspace Types:**
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `simple` | Single repo, worktree at workspace root | Panopticon |
+| `monorepo` | Multiple subrepos as worktrees in subdirs | MYN (fe/, api/) |
+
+For `monorepo` projects, the agent should `cd` into the appropriate subdir based on the work being done.
 
 **Why single tracker?**
 - **Simplicity**: One source of truth for issues
