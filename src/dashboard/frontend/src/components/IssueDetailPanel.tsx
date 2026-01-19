@@ -468,26 +468,36 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                   <div className="mt-3">
                     <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Containers</p>
                     <div className="flex flex-wrap gap-2">
-                      {Object.entries(workspace.containers).map(([name, status]) => (
-                        <span
-                          key={name}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
-                            status.running
-                              ? 'bg-green-900/30 text-green-400'
-                              : 'bg-gray-700 text-gray-500'
-                          }`}
-                        >
-                          {name === 'postgres' || name === 'redis' ? (
-                            <Database className="w-3 h-3" />
-                          ) : (
-                            <Box className="w-3 h-3" />
-                          )}
-                          {name}
-                          {status.running && status.uptime && (
-                            <span className="text-gray-400 ml-1">{status.uptime}</span>
-                          )}
-                        </span>
-                      ))}
+                      {Object.entries(workspace.containers).map(([name, status]) => {
+                        const isStarting = startContainersMutation.isPending && !status.running;
+                        return (
+                          <span
+                            key={name}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                              status.running
+                                ? 'bg-green-900/30 text-green-400'
+                                : isStarting
+                                ? 'bg-yellow-900/30 text-yellow-400 animate-pulse'
+                                : 'bg-gray-700 text-gray-500'
+                            }`}
+                          >
+                            {isStarting ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : name === 'postgres' || name === 'redis' ? (
+                              <Database className="w-3 h-3" />
+                            ) : (
+                              <Box className="w-3 h-3" />
+                            )}
+                            {name}
+                            {status.running && status.uptime && (
+                              <span className="text-gray-400 ml-1">{status.uptime}</span>
+                            )}
+                            {isStarting && (
+                              <span className="text-yellow-500 ml-1">starting...</span>
+                            )}
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
