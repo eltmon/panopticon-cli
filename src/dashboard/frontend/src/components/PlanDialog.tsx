@@ -96,11 +96,24 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg }),
       });
-      if (!res.ok) throw new Error('Failed to send message');
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) {
+        // Check if session ended - switch to viewing mode
+        if (data.sessionEnded) {
+          throw new Error('SESSION_ENDED');
+        }
+        throw new Error(data.error || 'Failed to send message');
+      }
+      return data;
     },
     onSuccess: () => {
       setMessage('');
+    },
+    onError: (err: Error) => {
+      if (err.message === 'SESSION_ENDED') {
+        // Session ended, switch to viewing mode
+        setStep('viewing');
+      }
     },
   });
 

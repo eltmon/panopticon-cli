@@ -3167,6 +3167,19 @@ app.post('/api/planning/:issueId/message', (req, res) => {
   }
 
   try {
+    // Check if session exists first
+    const sessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
+      encoding: 'utf-8',
+    }).trim().split('\n').filter(Boolean);
+
+    if (!sessions.includes(sessionName)) {
+      return res.status(404).json({
+        error: 'Planning session ended',
+        sessionEnded: true,
+        hint: 'Use "Continue Planning" to start a new session'
+      });
+    }
+
     // Send message to tmux session
     execSync(`tmux send-keys -t ${sessionName} "${message.replace(/"/g, '\\"')}"`, { encoding: 'utf-8' });
     execSync(`tmux send-keys -t ${sessionName} Enter`, { encoding: 'utf-8' });
