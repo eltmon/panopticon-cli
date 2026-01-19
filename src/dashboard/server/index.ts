@@ -1566,14 +1566,14 @@ app.get('/api/workspaces/:issueId/clean/preview', (req, res) => {
 
     // Find all files, excluding build artifacts
     const findCmd = `find "${workspacePath}" \\( ${excludePattern} \\) -o -type f -print 2>/dev/null | head -500`;
-    const filesOutput = execSync(findCmd, { encoding: 'utf-8' }).trim();
+    const filesOutput = execSync(findCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }).trim();
     const files = filesOutput ? filesOutput.split('\n').map(f => f.replace(workspacePath + '/', '')) : [];
 
     // Get total size (excluding node_modules etc)
     let totalSize = '0';
     try {
       const duCmd = `du -sh "${workspacePath}" --exclude=node_modules --exclude=target --exclude=dist --exclude=.git 2>/dev/null | cut -f1`;
-      totalSize = execSync(duCmd, { encoding: 'utf-8' }).trim() || '0';
+      totalSize = execSync(duCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }).trim() || '0';
     } catch {
       totalSize = 'unknown';
     }
@@ -1657,12 +1657,12 @@ app.get('/api/workspaces/:issueId/clean/preview', (req, res) => {
           const branchName = `feature/${issueLower}`;
           let compareRef = 'main';
           try {
-            execSync(`git rev-parse --verify ${branchName} 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8' });
+            execSync(`git rev-parse --verify ${branchName} 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
             compareRef = branchName;
           } catch {
             // Try master if main doesn't exist
             try {
-              execSync(`git rev-parse --verify main 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8' });
+              execSync(`git rev-parse --verify main 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
             } catch {
               compareRef = 'master';
             }
@@ -1671,7 +1671,7 @@ app.get('/api/workspaces/:issueId/clean/preview', (req, res) => {
           // Try to get file content from git
           const gitContent = execSync(
             `git show ${compareRef}:${relativePath} 2>/dev/null`,
-            { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 1024 * 1024 }
+            { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
           );
 
           // Compare with workspace file
@@ -1742,14 +1742,27 @@ app.post('/api/workspaces/:issueId/clean', (req, res) => {
 
       // Copy workspace to backup (excluding node_modules, target, etc. to save space)
       execSync(
-        `rsync -a --exclude=node_modules --exclude=target --exclude=dist --exclude=.git --exclude=__pycache__ --exclude=.cache --exclude=.next --exclude=coverage "${workspacePath}/" "${backupPath}/"`,
-        { encoding: 'utf-8' }
+        `rsync -a --quiet --exclude=node_modules --exclude=target --exclude=dist --exclude=.git --exclude=__pycache__ --exclude=.cache --exclude=.next --exclude=coverage "${workspacePath}/" "${backupPath}/"`,
+        { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 }
       );
     }
 
     // Remove the corrupted workspace directory
+    // If regular rm fails (files owned by root from Docker), use Docker to clean up
     console.log(`Removing corrupted workspace: ${workspacePath}`);
-    execSync(`rm -rf "${workspacePath}"`, { encoding: 'utf-8' });
+    try {
+      execSync(`rm -rf "${workspacePath}"`, { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024, stdio: 'pipe' });
+    } catch (rmError: any) {
+      console.log('Regular rm failed, using Docker to clean up root-owned files...');
+      // Use Alpine container to remove contents as root inside Docker (no sudo needed on host)
+      // Note: Can't remove /cleanup itself (mount point), so remove contents then rmdir from host
+      execSync(
+        `docker run --rm -v "${workspacePath}:/cleanup" alpine sh -c "rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?* 2>/dev/null || true"`,
+        { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024, stdio: 'pipe' }
+      );
+      // Now remove the empty directory from host
+      execSync(`rmdir "${workspacePath}"`, { encoding: 'utf-8', stdio: 'pipe' });
+    }
 
     // Create fresh workspace using pan command
     const activityId = spawnPanCommand(
@@ -1858,10 +1871,14 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
         appendActivityOutput(activityId, '=== Starting containers ===');
 
         const workspaceDir = join(projectPath, 'workspaces', `feature-${featureName}`);
+        // Pass UID/GID for correct file ownership in containers
+        const uid = process.getuid?.() ?? 1000;
+        const gid = process.getgid?.() ?? 1000;
         const devUp = spawn('./dev', ['all'], {
           cwd: workspaceDir,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, UID: String(uid), GID: String(gid), DOCKER_USER: `${uid}:${gid}` },
         });
 
         devUp.stdout?.on('data', (data) => {
@@ -1943,10 +1960,22 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
       output: [],
     });
 
+    // Pass UID/GID to ensure Docker containers create files with correct ownership
+    // Projects should use: user: "${UID}:${GID}" in docker-compose.yml
+    const uid = process.getuid?.() ?? 1000;
+    const gid = process.getgid?.() ?? 1000;
+
     const child = spawn('./dev', ['all'], {
       cwd: workspacePath,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        UID: String(uid),
+        GID: String(gid),
+        // Also set DOCKER_USER for compatibility with different docker-compose patterns
+        DOCKER_USER: `${uid}:${gid}`,
+      },
     });
 
     child.stdout?.on('data', (data) => {
@@ -2444,10 +2473,14 @@ app.post('/api/agents', async (req, res) => {
           output: [],
         });
 
+        // Pass UID/GID for correct file ownership in containers
+        const containerUid = process.getuid?.() ?? 1000;
+        const containerGid = process.getgid?.() ?? 1000;
         const containerChild = spawn('./dev', ['all'], {
           cwd: workspacePath,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, UID: String(containerUid), GID: String(containerGid), DOCKER_USER: `${containerUid}:${containerGid}` },
         });
 
         containerChild.stdout?.on('data', (data) => {
