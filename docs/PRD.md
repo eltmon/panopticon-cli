@@ -2239,92 +2239,70 @@ interface Issue {
 }
 ```
 
-### Multi-Tracker Support
+### Single Tracker Per Project
 
-Projects can have **primary** and **secondary** trackers for different purposes:
+Each project uses **one issue tracker**. This keeps things simple and avoids confusion about where issues live.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    PANOPTICON PROJECT                            │
+│                    PROJECT CONFIGURATION                         │
 └─────────────────────────────────────────────────────────────────┘
                               │
-           ┌──────────────────┴──────────────────┐
-           ▼                                     ▼
-    ┌─────────────┐                       ┌─────────────┐
-    │   PRIMARY   │                       │  SECONDARY  │
-    │   (Linear)  │◀──── triage ─────────│  (GitHub)   │
-    │             │                       │             │
-    │ • PRDs      │                       │ • Bug reports│
-    │ • Sprints   │                       │ • Feature asks│
-    │ • Roadmap   │                       │ • Community │
-    │ • Internal  │                       │ • External  │
-    └─────────────┘                       └─────────────┘
+                              ▼
+                       ┌─────────────┐
+                       │   TRACKER   │
+                       │             │
+                       │  Linear OR  │
+                       │  GitHub OR  │
+                       │  GitLab     │
+                       │             │
+                       └─────────────┘
 ```
 
-**Why multi-tracker?**
-- **Internal vs External**: Use Linear for detailed planning, GitHub for community engagement
-- **Privacy**: Keep roadmap/PRDs in Linear, expose only public issues on GitHub
-- **Workflow fit**: Linear is better for sprints; GitHub is where contributors expect to report bugs
+**Configuration:**
 
-### Triage Workflow
+```toml
+# ~/.panopticon/projects.toml
 
-When `auto_sync = false` (recommended), triage is manual:
+[projects.myn]
+path = "/home/user/projects/myn"
+tracker = "linear"
+linear_team = "MIN"
+
+[projects.panopticon]
+path = "/home/user/projects/panopticon"
+tracker = "linear"
+linear_team = "PAN"
+
+[projects.opensource-lib]
+path = "/home/user/projects/mylib"
+tracker = "github"
+github_repo = "user/mylib"
+```
+
+**Why single tracker?**
+- **Simplicity**: One source of truth for issues
+- **No sync conflicts**: No need to keep two systems in sync
+- **Clear ownership**: Everyone knows where to file/find issues
+- **Reduced cognitive load**: No "which tracker has this issue?" confusion
+
+**Choosing a tracker:**
+
+| Use Case | Recommended Tracker |
+|----------|---------------------|
+| Private projects | Linear |
+| Open source with community | GitHub |
+| Enterprise with existing tooling | GitLab or Jira |
+
+### Commands
 
 ```bash
-# See GitHub issues needing triage
-work triage
+# Work on an issue (tracker is determined by project config)
+work issue MIN-42       # Linear issue
+work issue #42          # GitHub issue (if project uses GitHub)
 
-# Output:
-# GitHub Issues (panopticon) - 3 untriaged
-# #42  Bug: Agent crashes with emoji in title     [bug]
-# #43  Feature: Support Jira                       [enhancement]
-# #44  Question: How to configure workspaces?      [question]
-
-# Create Linear issue from GitHub issue
-work triage #42 --create
-# Creates PAN-15 linked to GitHub #42
-
-# Or dismiss (not worth tracking internally)
-work triage #44 --dismiss "Answered in discussion"
-```
-
-When `auto_sync = true` (optional), GitHub issues auto-create Linear issues:
-- New GitHub issue → Creates Linear issue with `[GH#42]` prefix
-- Linear issue closed → Closes linked GitHub issue
-- Comment on either → Synced to both (optional)
-
-### Commands with Multi-Tracker
-
-```bash
-# Work on primary tracker issue (default)
-work issue PAN-42
-
-# Work on secondary tracker issue (explicit)
-work issue #42              # GitHub issue
-work issue github#42        # Explicit tracker prefix
-
-# List from both trackers
-work list                   # Primary only (default)
-work list --all             # Both trackers
-work list --tracker github  # Secondary only
-```
-
-### Cross-Tracker Linking
-
-Issues can reference each other across trackers:
-
-```markdown
-# In Linear PAN-15 description:
-Fixes: github#42
-
-# In GitHub #42:
-Internal tracking: [PAN-15](https://linear.app/panopticon/issue/PAN-15)
-```
-
-Panopticon maintains these links in Beads:
-
-```jsonl
-{"id":"PAN-15","tracker":"linear","links":["github#42"],"created":"2026-01-16"}
+# List issues
+work list               # From configured tracker
 ```
 
 ---

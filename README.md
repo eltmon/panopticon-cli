@@ -54,7 +54,7 @@ Create `~/.panopticon.env`:
 
 ```bash
 LINEAR_API_KEY=lin_api_xxxxx
-GITHUB_TOKEN=ghp_xxxxx  # Optional: for secondary tracker
+GITHUB_TOKEN=ghp_xxxxx  # Optional: for GitHub-tracked projects
 ```
 
 ### Register Projects
