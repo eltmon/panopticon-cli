@@ -18,7 +18,6 @@ import {
   Play,
   Loader2,
   CheckCircle,
-  Trash2,
   AlertTriangle,
 } from 'lucide-react';
 import { Agent } from '../types';

@@ -270,11 +270,13 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
               if (data.active) {
                 // Session is running
                 setStep('planning');
-              } else if (data.recentOutput) {
-                // Session ended but has output - view it instead of restarting
+              } else if (data.recentOutput && !['In Planning', 'Planning', 'Discovery'].includes(issue.status)) {
+                // Session ended with output AND issue is no longer in planning state
+                // (e.g., moved to Planned or Ready) - show the completed view
                 setStep('viewing');
               } else {
-                // No active session or output - go back to ready
+                // Either no output, or issue is still in planning state wanting to resume
+                // Go to ready which shows "Resume Planning" for planning-state issues
                 setStep('ready');
               }
               // Show sync result if something was pulled
