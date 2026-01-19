@@ -49,6 +49,7 @@ interface WorkspaceInfo {
   services?: { name: string; url?: string }[];
   containers?: Record<string, ContainerStatus> | null;
   hasDocker?: boolean;
+  canContainerize?: boolean;
 }
 
 interface IssueDetailPanelProps {
@@ -150,12 +151,36 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
     },
   });
 
+  const containerizeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/workspaces/${issue.identifier}/containerize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to containerize workspace');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      // Refresh workspace info after a delay to allow script to complete
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['workspace', issue.identifier] });
+      }, 3000);
+    },
+  });
+
   const handleStartAgent = () => {
     startAgentMutation.mutate();
   };
 
   const handleCreateWorkspace = () => {
     createWorkspaceMutation.mutate();
+  };
+
+  const handleContainerize = () => {
+    containerizeMutation.mutate();
   };
 
   const priorityLabels: Record<number, { label: string; color: string }> = {
@@ -347,10 +372,35 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
                   </div>
                 )}
 
-                {/* Git-only workspace info */}
+                {/* Git-only workspace info with containerize option */}
                 {!workspace.hasDocker && (
-                  <div className="mt-3 text-xs text-gray-500">
-                    This is a git-only workspace (no containers). For containerized dev, run <code className="bg-gray-800 px-1 rounded">./new-feature</code> from infra.
+                  <div className="mt-3">
+                    {workspace.canContainerize ? (
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-500">Git-only workspace.</span>
+                        <button
+                          onClick={handleContainerize}
+                          disabled={containerizeMutation.isPending}
+                          className="flex items-center gap-1 px-2 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white text-xs rounded transition-colors"
+                        >
+                          {containerizeMutation.isPending ? (
+                            <>
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Setting up...
+                            </>
+                          ) : (
+                            <>
+                              <Box className="w-3 h-3" />
+                              Containerize
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500">
+                        This is a git-only workspace (no containers).
+                      </div>
+                    )}
                   </div>
                 )}
 

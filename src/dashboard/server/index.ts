@@ -780,10 +780,16 @@ app.get('/api/workspaces/:issueId', (req, res) => {
   }
 
   // Check if docker-compose exists (indicates containerized workspace)
-  const hasDocker = existsSync(dockerCompose);
+  // Look in multiple places: root, .devcontainer
+  const hasDocker = existsSync(dockerCompose) ||
+                    existsSync(join(workspacePath, '.devcontainer', 'docker-compose.yml')) ||
+                    existsSync(join(workspacePath, '.devcontainer', 'compose.yaml'));
 
   // Get container status
   const containers = hasDocker ? getContainerStatus(issueId) : null;
+
+  // Check if project supports containerization (has new-feature script)
+  const canContainerize = !hasDocker && existsSync(join(projectPath, 'infra', 'new-feature'));
 
   // Get MR URL
   const mrUrl = getMrUrl(issueId, workspacePath);
@@ -827,6 +833,7 @@ app.get('/api/workspaces/:issueId', (req, res) => {
     services,
     containers,
     hasDocker,
+    canContainerize,
   });
 });
 
@@ -857,6 +864,104 @@ app.post('/api/workspaces', (req, res) => {
   } catch (error: any) {
     console.error('Error creating workspace:', error);
     res.status(500).json({ error: 'Failed to create workspace: ' + error.message });
+  }
+});
+
+// Containerize an existing workspace (runs project's new-feature script)
+app.post('/api/workspaces/:issueId/containerize', (req, res) => {
+  const { issueId } = req.params;
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const issueLower = issueId.toLowerCase();
+
+  // Check if new-feature script exists
+  const newFeatureScript = join(projectPath, 'infra', 'new-feature');
+  if (!existsSync(newFeatureScript)) {
+    return res.status(400).json({
+      error: 'Project does not support containerization (no infra/new-feature script)',
+    });
+  }
+
+  // Check if already containerized
+  const workspaceName = `feature-${issueLower}`;
+  const workspacePath = join(projectPath, 'workspaces', workspaceName);
+  if (existsSync(join(workspacePath, '.devcontainer'))) {
+    return res.status(400).json({
+      error: 'Workspace is already containerized',
+    });
+  }
+
+  try {
+    // First, remove the git-only workspace if it exists
+    // The new-feature script will create a proper containerized one
+    if (existsSync(workspacePath)) {
+      // Run pan workspace destroy first to clean up the git worktree
+      execSync(`pan workspace destroy ${issueId} --force 2>/dev/null || true`, {
+        cwd: projectPath,
+        encoding: 'utf-8',
+      });
+    }
+
+    // Run the new-feature script from the infra directory
+    // Extract just the issue identifier (e.g., "min-645" from "MIN-645")
+    const featureName = issueLower;
+    const activityId = Date.now().toString();
+    const startTime = new Date();
+
+    // Spawn the new-feature script
+    const child = spawn('./new-feature', [featureName], {
+      cwd: join(projectPath, 'infra'),
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+    child.stdout?.on('data', (data) => {
+      output += data.toString();
+    });
+    child.stderr?.on('data', (data) => {
+      output += data.toString();
+    });
+
+    child.on('close', (code) => {
+      const endTime = new Date();
+      const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000);
+      activityLog.unshift({
+        id: activityId,
+        command: `./new-feature ${featureName}`,
+        description: `Containerize workspace for ${issueId}`,
+        status: code === 0 ? 'completed' : 'failed',
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        duration,
+        output: output.slice(-5000), // Keep last 5KB
+        projectPath: join(projectPath, 'infra'),
+      });
+      // Trim log to last 100 entries
+      if (activityLog.length > 100) {
+        activityLog.length = 100;
+      }
+    });
+
+    // Add to activity log immediately as running
+    activityLog.unshift({
+      id: activityId,
+      command: `./new-feature ${featureName}`,
+      description: `Containerize workspace for ${issueId}`,
+      status: 'running',
+      startTime: startTime.toISOString(),
+      projectPath: join(projectPath, 'infra'),
+    });
+
+    res.json({
+      success: true,
+      message: `Containerizing workspace for ${issueId}`,
+      activityId,
+      projectPath,
+    });
+  } catch (error: any) {
+    console.error('Error containerizing workspace:', error);
+    res.status(500).json({ error: 'Failed to containerize workspace: ' + error.message });
   }
 });
 
