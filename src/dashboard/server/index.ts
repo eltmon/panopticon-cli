@@ -958,7 +958,7 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
         appendActivityOutput(activityId, '=== Starting containers ===');
 
         const workspaceDir = join(projectPath, 'workspaces', `feature-${featureName}`);
-        const devUp = spawn('./dev', ['up'], {
+        const devUp = spawn('./dev', ['all'], {
           cwd: workspaceDir,
           detached: true,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -976,7 +976,7 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
         });
 
         devUp.on('close', (devCode) => {
-          appendActivityOutput(activityId, `[${new Date().toISOString()}] ./dev up exited with code ${devCode}`);
+          appendActivityOutput(activityId, `[${new Date().toISOString()}] ./dev all exited with code ${devCode}`);
           updateActivity(activityId, { status: devCode === 0 ? 'completed' : 'failed' });
         });
 
@@ -1038,12 +1038,12 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
     logActivity({
       id: activityId,
       timestamp: new Date().toISOString(),
-      command: `./dev up (${issueId})`,
+      command: `./dev all (${issueId})`,
       status: 'running',
       output: [],
     });
 
-    const child = spawn('./dev', ['up'], {
+    const child = spawn('./dev', ['all'], {
       cwd: workspacePath,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1061,7 +1061,7 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
     });
 
     child.on('close', (code) => {
-      appendActivityOutput(activityId, `[${new Date().toISOString()}] ./dev up exited with code ${code}`);
+      appendActivityOutput(activityId, `[${new Date().toISOString()}] ./dev all exited with code ${code}`);
       updateActivity(activityId, { status: code === 0 ? 'completed' : 'failed' });
     });
 
