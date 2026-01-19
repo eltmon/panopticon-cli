@@ -1,9 +1,92 @@
 import express from 'express';
 import cors from 'cors';
 import { execSync, spawn } from 'child_process';
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+
+// Activity log for tracking pan command output
+const ACTIVITY_LOG = '/tmp/panopticon-activity.log';
+
+interface ActivityEntry {
+  id: string;
+  timestamp: string;
+  command: string;
+  status: 'running' | 'completed' | 'failed';
+  output: string[];
+}
+
+// In-memory activity store (last 50 entries)
+const activities: ActivityEntry[] = [];
+const MAX_ACTIVITIES = 50;
+
+function logActivity(entry: ActivityEntry) {
+  activities.unshift(entry);
+  if (activities.length > MAX_ACTIVITIES) {
+    activities.pop();
+  }
+}
+
+function updateActivity(id: string, updates: Partial<ActivityEntry>) {
+  const activity = activities.find(a => a.id === id);
+  if (activity) {
+    Object.assign(activity, updates);
+  }
+}
+
+function appendActivityOutput(id: string, line: string) {
+  const activity = activities.find(a => a.id === id);
+  if (activity) {
+    activity.output.push(line);
+    // Keep only last 100 lines per activity
+    if (activity.output.length > 100) {
+      activity.output.shift();
+    }
+  }
+}
+
+// Spawn a pan command and track its output
+function spawnPanCommand(args: string[], description: string): string {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const timestamp = new Date().toISOString();
+  const command = `pan ${args.join(' ')}`;
+
+  logActivity({
+    id,
+    timestamp,
+    command,
+    status: 'running',
+    output: [`[${timestamp}] Starting: ${command}`],
+  });
+
+  const child = spawn('pan', args, {
+    cwd: homedir(),
+    env: { ...process.env, FORCE_COLOR: '0' },
+  });
+
+  child.stdout?.on('data', (data) => {
+    const lines = data.toString().split('\n').filter((l: string) => l.trim());
+    lines.forEach((line: string) => appendActivityOutput(id, line));
+  });
+
+  child.stderr?.on('data', (data) => {
+    const lines = data.toString().split('\n').filter((l: string) => l.trim());
+    lines.forEach((line: string) => appendActivityOutput(id, `[stderr] ${line}`));
+  });
+
+  child.on('close', (code) => {
+    const status = code === 0 ? 'completed' : 'failed';
+    appendActivityOutput(id, `[${new Date().toISOString()}] Process exited with code ${code}`);
+    updateActivity(id, { status });
+  });
+
+  child.on('error', (err) => {
+    appendActivityOutput(id, `[error] ${err.message}`);
+    updateActivity(id, { status: 'failed' });
+  });
+
+  return id;
+}
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3002', 10);
@@ -391,6 +474,20 @@ app.post('/api/health/agents/:id/ping', (req, res) => {
   res.json({ success: true, status: 'healthy', hasOutput: !!health.lastOutput });
 });
 
+// Get activity log
+app.get('/api/activity', (_req, res) => {
+  res.json(activities);
+});
+
+// Get specific activity
+app.get('/api/activity/:id', (req, res) => {
+  const activity = activities.find(a => a.id === req.params.id);
+  if (!activity) {
+    return res.status(404).json({ error: 'Activity not found' });
+  }
+  res.json(activity);
+});
+
 // Create workspace (without agent)
 app.post('/api/workspaces', (req, res) => {
   const { issueId } = req.body;
@@ -400,15 +497,16 @@ app.post('/api/workspaces', (req, res) => {
   }
 
   try {
-    // Run pan workspace create in background
-    const child = spawn('pan', ['workspace', 'create', issueId], {
-      detached: true,
-      stdio: 'ignore',
-      cwd: homedir(),
-    });
-    child.unref();
+    const activityId = spawnPanCommand(
+      ['workspace', 'create', issueId],
+      `Create workspace for ${issueId}`
+    );
 
-    res.json({ success: true, message: `Creating workspace for ${issueId}` });
+    res.json({
+      success: true,
+      message: `Creating workspace for ${issueId}`,
+      activityId,
+    });
   } catch (error: any) {
     console.error('Error creating workspace:', error);
     res.status(500).json({ error: 'Failed to create workspace: ' + error.message });
@@ -424,15 +522,16 @@ app.post('/api/agents', (req, res) => {
   }
 
   try {
-    // Run pan work issue in background
-    const child = spawn('pan', ['work', 'issue', issueId], {
-      detached: true,
-      stdio: 'ignore',
-      cwd: homedir(),
-    });
-    child.unref();
+    const activityId = spawnPanCommand(
+      ['work', 'issue', issueId],
+      `Start agent for ${issueId}`
+    );
 
-    res.json({ success: true, message: `Starting agent for ${issueId}` });
+    res.json({
+      success: true,
+      message: `Starting agent for ${issueId}`,
+      activityId,
+    });
   } catch (error: any) {
     console.error('Error starting agent:', error);
     res.status(500).json({ error: 'Failed to start agent: ' + error.message });

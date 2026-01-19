@@ -7,10 +7,11 @@ import { HealthDashboard } from './components/HealthDashboard';
 import { SkillsList } from './components/SkillsList';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { IssueDetailPanel } from './components/IssueDetailPanel';
-import { Eye, LayoutGrid, Users, Activity, BookOpen } from 'lucide-react';
+import { ActivityPanel } from './components/ActivityPanel';
+import { Eye, LayoutGrid, Users, Activity, BookOpen, Terminal } from 'lucide-react';
 import { Agent, Issue } from './types';
 
-type Tab = 'kanban' | 'agents' | 'skills' | 'health';
+type Tab = 'kanban' | 'agents' | 'skills' | 'health' | 'activity';
 
 async function fetchAgents(): Promise<Agent[]> {
   const res = await fetch('/api/agents');
@@ -64,6 +65,7 @@ export default function App() {
             {([
               { id: 'kanban', label: 'Board', icon: LayoutGrid },
               { id: 'agents', label: 'Agents', icon: Users },
+              { id: 'activity', label: 'Activity', icon: Terminal },
               { id: 'skills', label: 'Skills', icon: BookOpen },
               { id: 'health', label: 'Health', icon: Activity },
             ] as const).map(({ id, label, icon: Icon }) => (
@@ -131,6 +133,11 @@ export default function App() {
         {activeTab === 'health' && (
           <div className="p-6 w-full overflow-auto">
             <HealthDashboard />
+          </div>
+        )}
+        {activeTab === 'activity' && (
+          <div className="w-full h-full">
+            <ActivityPanel onClose={() => setActiveTab('kanban')} />
           </div>
         )}
       </main>
