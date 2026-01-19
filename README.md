@@ -351,6 +351,25 @@ If you're both developing Panopticon AND using it for your own projects:
 3. **Config is shared** - workspaces/agents work the same either way
 4. **Test in a real project** - your own usage is the best test
 
+## Troubleshooting
+
+### Slow Vite/React Frontend with Multiple Workspaces
+
+If running multiple containerized workspaces with Vite/React frontends, you may notice CPU spikes and slow HMR. This is because Vite's default file watching polls every 100ms, which compounds with multiple instances.
+
+**Fix:** Increase the polling interval in your `vite.config.mjs`:
+
+```javascript
+server: {
+    watch: {
+        usePolling: true,
+        interval: 3000,  // Poll every 3s instead of 100ms default
+    },
+}
+```
+
+A 3000ms interval supports 4-5 concurrent workspaces comfortably while maintaining acceptable HMR responsiveness.
+
 ## ⭐ Star History
 
 <a href="https://star-history.com/#eltmon/panopticon&Date">

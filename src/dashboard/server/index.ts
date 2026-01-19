@@ -619,17 +619,26 @@ app.get('/api/activity/:id', (req, res) => {
 // Get container status for workspace
 function getContainerStatus(issueId: string): Record<string, { running: boolean; uptime: string | null }> {
   const issueLower = issueId.toLowerCase();
-  const containerNames = ['frontend', 'api', 'postgres', 'redis'];
+  // Map display names to possible container suffixes
+  const containerMap: Record<string, string[]> = {
+    'frontend': ['frontend', 'fe'],  // MYN uses 'fe' for frontend
+    'api': ['api'],
+    'postgres': ['postgres'],
+    'redis': ['redis'],
+  };
   const status: Record<string, { running: boolean; uptime: string | null }> = {};
 
-  for (const name of containerNames) {
+  for (const [displayName, suffixes] of Object.entries(containerMap)) {
     try {
-      // Try both naming conventions
-      const patterns = [
-        `myn-feature-${issueLower}-${name}-1`,
-        `feature-${issueLower}-${name}-1`,
-        `${issueLower}-${name}-1`,
-      ];
+      // Try multiple naming conventions and suffixes
+      const patterns: string[] = [];
+      for (const suffix of suffixes) {
+        patterns.push(
+          `myn-feature-${issueLower}-${suffix}-1`,
+          `feature-${issueLower}-${suffix}-1`,
+          `${issueLower}-${suffix}-1`,
+        );
+      }
 
       let found = false;
       for (const containerName of patterns) {
@@ -641,17 +650,17 @@ function getContainerStatus(issueId: string): Record<string, { running: boolean;
         if (output) {
           const isRunning = output.startsWith('Up');
           const uptime = isRunning ? output.replace(/^Up\s+/, '').split(/\s+/)[0] : null;
-          status[name] = { running: isRunning, uptime };
+          status[displayName] = { running: isRunning, uptime };
           found = true;
           break;
         }
       }
 
       if (!found) {
-        status[name] = { running: false, uptime: null };
+        status[displayName] = { running: false, uptime: null };
       }
     } catch {
-      status[name] = { running: false, uptime: null };
+      status[displayName] = { running: false, uptime: null };
     }
   }
 
