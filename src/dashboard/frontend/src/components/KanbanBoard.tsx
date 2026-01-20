@@ -10,6 +10,8 @@ interface IssueCost {
   totalCost: number;
   tokenCount: number;
   sessionCount: number;
+  model?: string;
+  durationMinutes?: number;
 }
 
 // Fetch costs for all issues
@@ -673,7 +675,7 @@ function IssueCard({ issue, agent, cost, isSelected, onSelect, onPlan, onViewBea
             {cost && cost.totalCost > 0 && (
               <span
                 className={`ml-auto px-1.5 py-0.5 rounded text-xs font-medium ${getCostColor(cost.totalCost)}`}
-                title={`${cost.sessionCount} session${cost.sessionCount !== 1 ? 's' : ''}, ${(cost.tokenCount / 1000000).toFixed(2)}M tokens`}
+                title={`${(cost.tokenCount / 1000000).toFixed(2)}M tokens${cost.model ? ` • ${cost.model.replace('claude-', '').replace(/-20[0-9]{6}$/, '')}` : ''}${cost.durationMinutes ? ` • ${Math.round(cost.durationMinutes)}min` : ''}`}
               >
                 <DollarSign className="w-3 h-3 inline -mt-0.5" />
                 {formatCost(cost.totalCost).slice(1)}

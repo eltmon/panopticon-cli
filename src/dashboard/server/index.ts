@@ -4166,18 +4166,49 @@ app.get('/api/costs/summary', (_req, res) => {
 // GET /api/costs/by-issue - Costs grouped by issue
 app.get('/api/costs/by-issue', (_req, res) => {
   try {
+    // Merge data from both session-map (legacy) and runtime-metrics (new)
     const sessionMap = loadSessionMap();
-    const issues: Array<{ issueId: string; totalCost: number; tokenCount: number; sessionCount: number }> = [];
+    const runtimeMetrics = loadRuntimeMetrics();
+    const issueMap: Record<string, { totalCost: number; tokenCount: number; sessionCount: number; model?: string; durationMinutes?: number }> = {};
 
+    // Add from session-map (legacy format)
     for (const [issueId, issueData] of Object.entries(sessionMap.issues || {})) {
       const data = issueData as any;
-      issues.push({
-        issueId,
+      const key = issueId.toLowerCase();
+      issueMap[key] = {
         totalCost: data.totalCost || 0,
         tokenCount: data.totalTokens || 0,
         sessionCount: data.sessions?.length || 0,
-      });
+      };
     }
+
+    // Add/merge from runtime-metrics (new format with tasks)
+    for (const task of runtimeMetrics.tasks || []) {
+      if (task.issueId) {
+        const key = task.issueId.toLowerCase();
+        if (!issueMap[key]) {
+          issueMap[key] = { totalCost: 0, tokenCount: 0, sessionCount: 0 };
+        }
+        // If this is a new entry or has more data, update it
+        if (task.cost > issueMap[key].totalCost) {
+          issueMap[key].totalCost = task.cost;
+          issueMap[key].tokenCount = task.tokenCount;
+          issueMap[key].model = task.model;
+          issueMap[key].durationMinutes = task.durationMinutes;
+        }
+        issueMap[key].sessionCount = Math.max(issueMap[key].sessionCount, 1);
+      }
+    }
+
+    // Convert to array
+    const issues = Object.entries(issueMap).map(([issueId, data]) => ({
+      issueId: issueId.toUpperCase(),
+      totalCost: data.totalCost,
+      tokenCount: data.tokenCount,
+      sessionCount: data.sessionCount,
+      model: data.model,
+      durationMinutes: data.durationMinutes,
+    }));
 
     // Sort by cost descending
     issues.sort((a, b) => b.totalCost - a.totalCost);
