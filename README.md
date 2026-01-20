@@ -358,6 +358,37 @@ Panopticon ships with 10+ high-value skills:
 | `dependency-update` | Safe dependency updates |
 | `onboard-codebase` | Understanding new codebases |
 
+### Reserved Skill Names
+
+Panopticon reserves the following skill names. **Do not use these names for project-specific skills** to avoid conflicts:
+
+**Pan operations:**
+`pan-down`, `pan-help`, `pan-install`, `pan-issue`, `pan-plan`, `pan-quickstart`, `pan-setup`, `pan-status`, `pan-up`
+
+**Workflow skills:**
+`beads`, `bug-fix`, `code-review`, `code-review-performance`, `code-review-security`, `dependency-update`, `feature-work`, `incident-response`, `onboard-codebase`, `refactor`, `release`, `session-health`, `skill-creator`, `web-design-guidelines`, `work-complete`
+
+**Recommendation:** Use a project-specific prefix for your skills (e.g., `myn-standards`, `acme-deployment`) to avoid namespace collisions.
+
+### Project-Specific Skills
+
+Projects can have their own skills alongside Panopticon's:
+
+```
+~/.claude/skills/
+├── pan-help/           # Symlink → ~/.panopticon/skills/pan-help/
+├── feature-work/       # Symlink → ~/.panopticon/skills/feature-work/
+└── ... (other pan skills)
+
+{project}/.claude/skills/
+├── myn-standards/      # Project-specific (git-tracked)
+└── myn-api-patterns/   # Project-specific (git-tracked)
+```
+
+Project-specific skills in `{project}/.claude/skills/` are **not managed by Panopticon**. They live in your project's git repo and take precedence over global skills with the same name.
+
+### Skill Distribution
+
 Skills are synced to all supported AI tools via symlinks:
 
 ```bash

@@ -1,9 +1,48 @@
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, cpSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import ora from 'ora';
-import { INIT_DIRS, CONFIG_FILE, PANOPTICON_HOME } from '../../lib/paths.js';
+import { INIT_DIRS, CONFIG_FILE, PANOPTICON_HOME, SKILLS_DIR } from '../../lib/paths.js';
 import { getDefaultConfig, saveConfig } from '../../lib/config.js';
 import { detectShell, getShellRcFile, addAlias, getAliasInstructions } from '../../lib/shell.js';
+
+// Get the package root directory (where skills/ lives)
+// Note: After bundling, code runs from dist/cli/index.js, so go up 2 levels
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PACKAGE_ROOT = join(__dirname, '..', '..'); // dist/cli -> dist -> package root
+const BUNDLED_SKILLS_DIR = join(PACKAGE_ROOT, 'skills');
+
+/**
+ * Copy bundled skills from package to ~/.panopticon/skills/
+ * Returns the number of skills copied
+ */
+function copyBundledSkills(): number {
+  if (!existsSync(BUNDLED_SKILLS_DIR)) {
+    return 0;
+  }
+
+  // Ensure skills directory exists
+  if (!existsSync(SKILLS_DIR)) {
+    mkdirSync(SKILLS_DIR, { recursive: true });
+  }
+
+  const skills = readdirSync(BUNDLED_SKILLS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory());
+
+  let copied = 0;
+  for (const skill of skills) {
+    const sourcePath = join(BUNDLED_SKILLS_DIR, skill.name);
+    const targetPath = join(SKILLS_DIR, skill.name);
+
+    // Copy skill directory (overwrites existing)
+    cpSync(sourcePath, targetPath, { recursive: true });
+    copied++;
+  }
+
+  return copied;
+}
 
 export async function initCommand(): Promise<void> {
   const spinner = ora('Initializing Panopticon...').start();
@@ -13,6 +52,7 @@ export async function initCommand(): Promise<void> {
     spinner.info('Panopticon already initialized');
     console.log(chalk.dim(`  Config: ${CONFIG_FILE}`));
     console.log(chalk.dim(`  Home: ${PANOPTICON_HOME}`));
+    console.log(chalk.dim('  Run `pan sync` to update skills'));
     return;
   }
 
@@ -30,6 +70,10 @@ export async function initCommand(): Promise<void> {
     saveConfig(config);
     spinner.text = 'Created config...';
 
+    // Copy bundled skills from package
+    spinner.text = 'Installing bundled skills...';
+    const skillsCopied = copyBundledSkills();
+
     // Detect shell and add alias
     const shell = detectShell();
     const rcFile = getShellRcFile(shell);
@@ -40,20 +84,26 @@ export async function initCommand(): Promise<void> {
       console.log('');
       console.log(chalk.green('✓') + ' Created ' + chalk.cyan(PANOPTICON_HOME));
       console.log(chalk.green('✓') + ' Created ' + chalk.cyan(CONFIG_FILE));
+      if (skillsCopied > 0) {
+        console.log(chalk.green('✓') + ` Installed ${skillsCopied} bundled skills`);
+      }
       console.log(chalk.green('✓') + ' ' + getAliasInstructions(shell));
     } else {
       spinner.succeed('Panopticon initialized!');
       console.log('');
       console.log(chalk.green('✓') + ' Created ' + chalk.cyan(PANOPTICON_HOME));
       console.log(chalk.green('✓') + ' Created ' + chalk.cyan(CONFIG_FILE));
+      if (skillsCopied > 0) {
+        console.log(chalk.green('✓') + ` Installed ${skillsCopied} bundled skills`);
+      }
       console.log(chalk.yellow('!') + ' Could not detect shell. Add alias manually:');
       console.log(chalk.dim('    alias pan="panopticon"'));
     }
 
     console.log('');
     console.log('Next steps:');
-    console.log(chalk.dim('  1. Add skills to ~/.panopticon/skills/'));
-    console.log(chalk.dim('  2. Run: pan sync'));
+    console.log(chalk.dim('  1. Run: pan sync'));
+    console.log(chalk.dim('  2. Start dashboard: pan up'));
 
   } catch (error: any) {
     spinner.fail('Failed to initialize');
