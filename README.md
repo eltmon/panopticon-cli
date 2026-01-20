@@ -80,6 +80,25 @@ Session 5: Refactor Radar detects: "Same entity called 'user', 'account', 'membe
 | 4 | AI makes 20 mistakes/day (still no memory) | AI makes 3 mistakes, codebase improving |
 | 8 | Developers give up on AI for legacy code | AI is productive, tech debt proposals in backlog |
 
+#### Shared Team Knowledge
+
+**When one developer learns, everyone benefits.**
+
+Captured skills live in your project's `.claude/skills/` directory - they're version-controlled alongside your code. When Sarah documents that "we use camelCase columns" after hitting that error, every developer on the team - and every AI session from that point forward - inherits that knowledge automatically.
+
+```
+myproject/
+├── .claude/skills/
+│   └── project-knowledge/     # ← Git-tracked, shared by entire team
+│       └── SKILL.md           # "Database uses camelCase, not snake_case"
+├── src/
+└── ...
+```
+
+No more repeating the same corrections to AI across 10 different developers. No more tribal knowledge locked in one person's head. The team's collective understanding of your codebase becomes permanent, searchable, and automatically applied.
+
+**New hire onboarding?** The AI already knows your conventions from day one.
+
 #### For Technical Leaders
 
 **What gets measured gets managed.** Panopticon's Refactor Radar surfaces the specific patterns that are costing you AI productivity:
