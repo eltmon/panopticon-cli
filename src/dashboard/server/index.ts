@@ -2252,9 +2252,12 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
       }
     }
 
+    // Record task metrics for the completed work
+    recordApprovedTask(issueId, workspacePath, 'success');
+
     res.json({
       success: true,
-      message: `Approved ${issueId}: merged, workspace removed, issue closed${isGitHubIssue || issueId.toUpperCase().startsWith('PAN-') ? ', skills synced' : ''}`,
+      message: `Approved ${issueId}: merged, workspace removed, issue closed${isGitHubIssue || issueId.toUpperCase().startsWith('PAN-') ? ', skills synced' : ''}, metrics recorded`,
     });
   } catch (error: any) {
     console.error('Error approving workspace:', error);
@@ -3894,6 +3897,238 @@ function loadRuntimeMetrics(): any {
     }
   } catch {}
   return { version: 1, tasks: [], runtimes: {}, lastUpdated: new Date().toISOString() };
+}
+
+function saveRuntimeMetrics(data: any): void {
+  const { mkdirSync } = require('fs');
+  mkdirSync(dirname(METRICS_FILE), { recursive: true });
+  data.lastUpdated = new Date().toISOString();
+  writeFileSync(METRICS_FILE, JSON.stringify(data, null, 2));
+}
+
+// Parse Claude Code session files for a workspace and return aggregated usage
+function parseWorkspaceSessionUsage(workspacePath: string): {
+  tokenCount: number;
+  cost: number;
+  model: string;
+  startTime: string | null;
+  endTime: string | null;
+} {
+  // Claude Code session directory name format: path with / replaced by -
+  // e.g., /home/eltmon/projects/foo -> -home-eltmon-projects-foo
+  const sessionDirName = workspacePath.replace(/\//g, '-');
+  const sessionDir = join(homedir(), '.claude', 'projects', sessionDirName);
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheWriteTokens = 0;
+  let model = 'claude-sonnet-4';
+  let startTime: string | null = null;
+  let endTime: string | null = null;
+
+  if (!existsSync(sessionDir)) {
+    console.log(`No session directory found: ${sessionDir}`);
+    return { tokenCount: 0, cost: 0, model, startTime: null, endTime: null };
+  }
+
+  try {
+    const files = readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
+
+    for (const file of files) {
+      const filePath = join(sessionDir, file);
+      const content = readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n').filter(l => l.trim());
+
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+
+          // Track timestamps
+          if (entry.timestamp) {
+            if (!startTime || entry.timestamp < startTime) {
+              startTime = entry.timestamp;
+            }
+            if (!endTime || entry.timestamp > endTime) {
+              endTime = entry.timestamp;
+            }
+          }
+
+          // Extract model
+          if (entry.message?.model || entry.model) {
+            model = entry.message?.model || entry.model;
+          }
+
+          // Extract usage - can be at top level or in message
+          const usage = entry.usage || entry.message?.usage;
+          if (usage) {
+            totalInputTokens += usage.input_tokens || 0;
+            totalOutputTokens += usage.output_tokens || 0;
+            totalCacheReadTokens += usage.cache_read_input_tokens || 0;
+            totalCacheWriteTokens += usage.cache_creation_input_tokens || 0;
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+    }
+
+    // Calculate cost based on model pricing
+    let pricing = MODEL_PRICING['claude-sonnet-4']; // default
+    if (model.includes('opus')) {
+      pricing = MODEL_PRICING['claude-opus-4'];
+    } else if (model.includes('haiku')) {
+      pricing = MODEL_PRICING['claude-haiku-3.5'];
+    }
+
+    const cost =
+      (totalInputTokens / 1000) * pricing.inputPer1k +
+      (totalOutputTokens / 1000) * pricing.outputPer1k +
+      (totalCacheReadTokens / 1000) * (pricing.cacheReadPer1k || 0) +
+      (totalCacheWriteTokens / 1000) * (pricing.cacheWritePer1k || 0);
+
+    const tokenCount = totalInputTokens + totalOutputTokens + totalCacheReadTokens + totalCacheWriteTokens;
+
+    console.log(`Parsed session usage for ${workspacePath}: ${tokenCount} tokens, $${cost.toFixed(4)}`);
+
+    return { tokenCount, cost, model, startTime, endTime };
+  } catch (err) {
+    console.error('Error parsing session files:', err);
+    return { tokenCount: 0, cost: 0, model, startTime: null, endTime: null };
+  }
+}
+
+// Record a completed task in runtime metrics
+function recordApprovedTask(issueId: string, workspacePath: string, outcome: 'success' | 'failure' | 'partial'): void {
+  try {
+    const usage = parseWorkspaceSessionUsage(workspacePath);
+    const data = loadRuntimeMetrics();
+
+    const startedAt = usage.startTime || new Date().toISOString();
+    const completedAt = usage.endTime || new Date().toISOString();
+    const durationMinutes = (new Date(completedAt).getTime() - new Date(startedAt).getTime()) / 60000;
+
+    // Determine capability from issue prefix or description
+    let capability: string = 'feature';
+    const issueLower = issueId.toLowerCase();
+    if (issueLower.includes('bug') || issueLower.includes('fix')) {
+      capability = 'bugfix';
+    } else if (issueLower.includes('refactor')) {
+      capability = 'refactor';
+    } else if (issueLower.includes('doc')) {
+      capability = 'documentation';
+    } else if (issueLower.includes('test')) {
+      capability = 'testing';
+    } else if (issueLower.includes('review')) {
+      capability = 'review';
+    } else if (issueLower.includes('plan')) {
+      capability = 'planning';
+    }
+
+    const task = {
+      id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      runtime: 'claude',
+      issueId,
+      capability,
+      model: usage.model,
+      outcome,
+      startedAt,
+      completedAt,
+      durationMinutes: Math.max(durationMinutes, 0),
+      cost: usage.cost,
+      tokenCount: usage.tokenCount,
+    };
+
+    data.tasks.push(task);
+
+    // Rebuild runtime aggregates
+    const runtimeTasks = data.tasks.filter((t: any) => t.runtime === 'claude');
+    const successful = runtimeTasks.filter((t: any) => t.outcome === 'success').length;
+    const failed = runtimeTasks.filter((t: any) => t.outcome === 'failure').length;
+    const partial = runtimeTasks.filter((t: any) => t.outcome === 'partial').length;
+    const totalCost = runtimeTasks.reduce((sum: number, t: any) => sum + (t.cost || 0), 0);
+    const totalTokens = runtimeTasks.reduce((sum: number, t: any) => sum + (t.tokenCount || 0), 0);
+    const totalDuration = runtimeTasks.reduce((sum: number, t: any) => sum + (t.durationMinutes || 0), 0);
+
+    // By capability aggregation
+    const byCapability: any = {};
+    const capabilities = ['feature', 'bugfix', 'refactor', 'review', 'planning', 'documentation', 'testing', 'other'];
+    for (const cap of capabilities) {
+      const capTasks = runtimeTasks.filter((t: any) => t.capability === cap);
+      if (capTasks.length > 0) {
+        const capSuccessful = capTasks.filter((t: any) => t.outcome === 'success').length;
+        const capTotalCost = capTasks.reduce((sum: number, t: any) => sum + (t.cost || 0), 0);
+        const capTotalDuration = capTasks.reduce((sum: number, t: any) => sum + (t.durationMinutes || 0), 0);
+        byCapability[cap] = {
+          tasks: capTasks.length,
+          successfulTasks: capSuccessful,
+          successRate: capTasks.length > 0 ? capSuccessful / capTasks.length : 0,
+          avgDurationMinutes: capTasks.length > 0 ? capTotalDuration / capTasks.length : 0,
+          totalCost: capTotalCost,
+          avgCost: capTasks.length > 0 ? capTotalCost / capTasks.length : 0,
+        };
+      }
+    }
+
+    // By model aggregation
+    const byModel: any = {};
+    const models: string[] = [...new Set(runtimeTasks.map((t: any) => t.model || 'unknown'))] as string[];
+    for (const m of models) {
+      const modelTasks = runtimeTasks.filter((t: any) => (t.model || 'unknown') === m);
+      const modelSuccessful = modelTasks.filter((t: any) => t.outcome === 'success').length;
+      const modelTotalCost = modelTasks.reduce((sum: number, t: any) => sum + (t.cost || 0), 0);
+      byModel[m] = {
+        tasks: modelTasks.length,
+        successRate: modelTasks.length > 0 ? modelSuccessful / modelTasks.length : 0,
+        avgCost: modelTasks.length > 0 ? modelTotalCost / modelTasks.length : 0,
+        totalCost: modelTotalCost,
+      };
+    }
+
+    // Daily stats
+    const dailyStats: any[] = [];
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    for (let d = new Date(thirtyDaysAgo); d <= new Date(); d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      const dayTasks = runtimeTasks.filter((t: any) => t.completedAt?.startsWith(dateStr));
+      if (dayTasks.length > 0) {
+        const daySuccessful = dayTasks.filter((t: any) => t.outcome === 'success').length;
+        const dayCost = dayTasks.reduce((sum: number, t: any) => sum + (t.cost || 0), 0);
+        const dayTokens = dayTasks.reduce((sum: number, t: any) => sum + (t.tokenCount || 0), 0);
+        dailyStats.push({
+          date: dateStr,
+          tasks: dayTasks.length,
+          successfulTasks: daySuccessful,
+          cost: dayCost,
+          successRate: dayTasks.length > 0 ? daySuccessful / dayTasks.length : 0,
+          tokenCount: dayTokens,
+        });
+      }
+    }
+
+    data.runtimes['claude'] = {
+      runtime: 'claude',
+      totalTasks: runtimeTasks.length,
+      successfulTasks: successful,
+      failedTasks: failed,
+      partialTasks: partial,
+      successRate: runtimeTasks.length > 0 ? successful / runtimeTasks.length : 0,
+      avgDurationMinutes: runtimeTasks.length > 0 ? totalDuration / runtimeTasks.length : 0,
+      avgCost: runtimeTasks.length > 0 ? totalCost / runtimeTasks.length : 0,
+      totalCost,
+      totalTokens,
+      byCapability,
+      byModel,
+      dailyStats,
+      lastUpdated: new Date().toISOString(),
+    };
+
+    saveRuntimeMetrics(data);
+    console.log(`Recorded task for ${issueId}: ${outcome}, $${usage.cost.toFixed(4)}, ${usage.tokenCount} tokens`);
+  } catch (err) {
+    console.error('Error recording task metrics:', err);
+  }
 }
 
 // GET /api/costs/summary - Overall cost summary
