@@ -204,6 +204,20 @@ function buildAgentPrompt(issueId: string, workspacePath: string, projectRoot: s
   lines.push('4. Mark beads tasks as complete as you finish them: `bd update <task-id> --status closed`');
   lines.push('');
 
+  // CRITICAL: Instructions for maintaining state for crash recovery
+  lines.push('## CRITICAL: Keep STATE.md Updated');
+  lines.push('');
+  lines.push('**You may be interrupted, crash, or be stopped at any time.** To ensure the next agent can continue:');
+  lines.push('');
+  lines.push('1. **Update `.planning/STATE.md` frequently** as you complete work');
+  lines.push('2. After completing each task or significant milestone, update the "Current Status" section');
+  lines.push('3. Document any decisions made or blockers encountered');
+  lines.push('4. Keep the "Remaining Work" section accurate');
+  lines.push('');
+  lines.push('The next agent will read STATE.md to know exactly where to pick up. Beads tasks track individual items,');
+  lines.push('but STATE.md provides the narrative context and current state that beads alone cannot capture.');
+  lines.push('');
+
   return lines.join('\n');
 }
 
