@@ -158,29 +158,37 @@ function buildAgentPrompt(issueId: string, workspacePath: string, projectRoot: s
     '',
   ];
 
-  // Add planning context if available
-  const planningContext = readPlanningContext(workspacePath);
-  if (planningContext) {
-    lines.push('## Planning Context');
-    lines.push('');
-    lines.push('The following planning was done for this issue:');
-    lines.push('');
-    lines.push('```markdown');
-    // Truncate if too long
-    const truncated = planningContext.length > 3000
-      ? planningContext.slice(0, 3000) + '\n\n... (truncated, see .planning/STATE.md for full context)'
-      : planningContext;
-    lines.push(truncated);
-    lines.push('```');
-    lines.push('');
+  // Check what context files exist
+  const hasStateFile = existsSync(join(workspacePath, '.planning', 'STATE.md'));
+  const hasClaudeMd = existsSync(join(workspacePath, 'CLAUDE.md'));
+  const hasProjectClaudeMd = existsSync(join(projectRoot, 'CLAUDE.md'));
+
+  // CRITICAL: Instruct agent to read context files FIRST
+  lines.push('## IMPORTANT: Read Context Files First');
+  lines.push('');
+  lines.push('Before starting any work, you MUST read these files to understand the full context:');
+  lines.push('');
+
+  if (hasStateFile) {
+    lines.push(`1. **Read \`.planning/STATE.md\`** - Contains the full planning context, decisions made, and current status for this issue.`);
+  }
+  if (hasClaudeMd) {
+    lines.push(`2. **Read \`CLAUDE.md\`** (in workspace) - Contains workspace-specific instructions and warnings.`);
+  }
+  if (hasProjectClaudeMd && projectRoot !== workspacePath) {
+    lines.push(`3. **Read \`${projectRoot}/CLAUDE.md\`** - Contains project-wide development guidelines.`);
   }
 
-  // Add beads tasks
+  lines.push('');
+  lines.push('These files contain critical context that may have been updated since the last session.');
+  lines.push('');
+
+  // Add beads tasks summary
   const beadsTasks = readBeadsTasks(workspacePath, projectRoot, issueId);
   if (beadsTasks.length > 0) {
     lines.push('## Beads Tasks');
     lines.push('');
-    lines.push('Tasks created during planning:');
+    lines.push('Tasks created during planning (check STATE.md for which are complete):');
     lines.push('');
     lines.push(beadsTasks.join('\n'));
     lines.push('');
@@ -188,19 +196,12 @@ function buildAgentPrompt(issueId: string, workspacePath: string, projectRoot: s
     lines.push('');
   }
 
-  // Add workspace CLAUDE.md if it exists
-  const claudeMdPath = join(workspacePath, 'CLAUDE.md');
-  if (existsSync(claudeMdPath)) {
-    lines.push('## Workspace Instructions');
-    lines.push('');
-    lines.push('See CLAUDE.md in workspace for additional context and warnings.');
-    lines.push('');
-  }
-
   lines.push('## Your Task');
   lines.push('');
-  lines.push('Implement the planned work for this issue. Follow the planning context above.');
-  lines.push('Mark beads tasks as complete as you finish them: `bd update <task-id> --status closed`');
+  lines.push('1. Read the context files listed above');
+  lines.push('2. Check STATE.md for current status and what work remains');
+  lines.push('3. Continue implementing the planned work');
+  lines.push('4. Mark beads tasks as complete as you finish them: `bd update <task-id> --status closed`');
   lines.push('');
 
   return lines.join('\n');
