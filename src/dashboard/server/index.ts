@@ -2124,16 +2124,15 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
       console.error('Error removing worktree (non-fatal):', wtError.message);
     }
 
-    // 10. Delete LOCAL feature branch only - NEVER delete remote branch
-    // The remote branch serves as a backup/audit trail
-    try {
-      execSync(`git branch -d ${branchName}`, { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
-      console.log(`Deleted local branch ${branchName} (remote preserved)`);
-    } catch (branchError: any) {
-      // If -d fails, the branch might not be fully merged - don't force delete
-      console.log(`Could not delete local branch ${branchName} (may have unmerged commits): ${branchError.message}`);
-      // DO NOT use -D (force delete) - if -d fails, something is wrong
-    }
+    // 10. DISABLED: Keep feature branches for safety during early development
+    // TODO: Re-enable branch cleanup once workflow is battle-tested
+    // try {
+    //   execSync(`git branch -d ${branchName}`, { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+    //   console.log(`Deleted local branch ${branchName} (remote preserved)`);
+    // } catch (branchError: any) {
+    //   console.log(`Could not delete local branch ${branchName} (may have unmerged commits): ${branchError.message}`);
+    // }
+    console.log(`Keeping local branch ${branchName} for safety (early development mode)`);
 
     // 6. Update Linear issue to Done (or GitHub label)
     const apiKey = getLinearApiKey();
