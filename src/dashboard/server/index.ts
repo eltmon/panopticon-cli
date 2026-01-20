@@ -2086,11 +2086,12 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
 
     if (isGitHubIssue) {
       // GitHub issue - add "done" label, remove "in-progress"
-      const token = process.env.GITHUB_TOKEN;
-      if (token) {
+      const ghConfig = getGitHubConfig();
+      if (ghConfig) {
         const number = parseInt(issueId.split('-')[1], 10);
-        const owner = 'eltmon';
-        const repo = 'panopticon-cli';
+        const repoConfig = ghConfig.repos.find(r => r.prefix === 'PAN') || ghConfig.repos[0];
+        const { owner, repo } = repoConfig;
+        const token = ghConfig.token;
 
         await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/in-progress`, {
           method: 'DELETE',
@@ -2222,10 +2223,14 @@ app.post('/api/issues/:issueId/close', async (req, res) => {
 
     // 1. Close the issue (GitHub via gh CLI, Linear via API)
     if (isGitHubIssue) {
+      const ghConfig = getGitHubConfig();
       const number = parseInt(issueId.split('-')[1], 10);
+      const repoConfig = ghConfig?.repos.find(r => r.prefix === 'PAN') || ghConfig?.repos[0];
+      const repoPath = repoConfig ? `${repoConfig.owner}/${repoConfig.repo}` : 'eltmon/panopticon-cli';
+
       try {
         // Use gh CLI for better auth handling
-        execSync(`gh issue close ${number} --repo eltmon/panopticon-cli --reason completed`, {
+        execSync(`gh issue close ${number} --repo ${repoPath} --reason completed`, {
           encoding: 'utf-8',
           timeout: 30000,
         });
@@ -2233,11 +2238,10 @@ app.post('/api/issues/:issueId/close', async (req, res) => {
       } catch (ghError: any) {
         console.error('gh CLI failed, trying API:', ghError.message);
         // Fallback to API if gh fails
-        const token = process.env.GITHUB_TOKEN;
-        if (token) {
-          await fetch(`https://api.github.com/repos/eltmon/panopticon-cli/issues/${number}`, {
+        if (ghConfig && repoConfig) {
+          await fetch(`https://api.github.com/repos/${repoConfig.owner}/${repoConfig.repo}/issues/${number}`, {
             method: 'PATCH',
-            headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `token ${ghConfig.token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
             body: JSON.stringify({ state: 'closed' }),
           });
         }
@@ -2354,12 +2358,14 @@ app.post('/api/agents', async (req, res) => {
     if (isGitHubIssue) {
       // GitHub issue - add "in-progress" label, remove "planned" label
       try {
-        const number = parseInt(issueId.split('-')[1], 10);
-        const owner = 'eltmon';
-        const repo = 'panopticon-cli';
-        const token = process.env.GITHUB_TOKEN;
+        const ghConfig = getGitHubConfig();
+        if (ghConfig) {
+          const number = parseInt(issueId.split('-')[1], 10);
+          // Find the repo config that matches this issue prefix
+          const repoConfig = ghConfig.repos.find(r => r.prefix === 'PAN') || ghConfig.repos[0];
+          const { owner, repo } = repoConfig;
+          const token = ghConfig.token;
 
-        if (token) {
           // Remove "planned" label if present
           await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/planned`, {
             method: 'DELETE',
