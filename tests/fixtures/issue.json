@@ -1,0 +1,48 @@
+{
+  "linear": {
+    "id": "issue-uuid-123",
+    "identifier": "TEST-1",
+    "title": "Test Issue for Fixtures",
+    "description": "This is a test issue used in fixtures",
+    "state": {
+      "name": "Todo",
+      "type": "unstarted"
+    },
+    "priority": 2,
+    "labels": [
+      { "id": "label-1", "name": "bug" },
+      { "id": "label-2", "name": "high-priority" }
+    ],
+    "assignee": {
+      "id": "user-123",
+      "name": "Test User",
+      "email": "test@example.com"
+    },
+    "url": "https://linear.app/test/issue/TEST-1"
+  },
+  "github": {
+    "id": 12345,
+    "number": 42,
+    "title": "Test GitHub Issue",
+    "body": "This is a test GitHub issue",
+    "state": "open",
+    "labels": [
+      { "name": "enhancement" }
+    ],
+    "assignee": {
+      "login": "testuser"
+    },
+    "html_url": "https://github.com/owner/repo/issues/42"
+  },
+  "normalized": {
+    "id": "issue-123",
+    "identifier": "TEST-1",
+    "title": "Test Issue",
+    "description": "Test description",
+    "status": "todo",
+    "priority": 2,
+    "labels": ["bug"],
+    "assignee": "Test User",
+    "url": "https://example.com/issue/1"
+  }
+}

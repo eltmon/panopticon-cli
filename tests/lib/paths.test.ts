@@ -18,6 +18,10 @@ import {
   TEMPLATES_DIR,
   CLAUDE_MD_TEMPLATES,
   INIT_DIRS,
+  CERTS_DIR,
+  TRAEFIK_DIR,
+  TRAEFIK_DYNAMIC_DIR,
+  TRAEFIK_CERTS_DIR,
 } from '../../src/lib/paths.js';
 
 describe('paths', () => {
@@ -95,10 +99,14 @@ describe('paths', () => {
       expect(INIT_DIRS).toContain(COSTS_DIR);
       expect(INIT_DIRS).toContain(TEMPLATES_DIR);
       expect(INIT_DIRS).toContain(CLAUDE_MD_TEMPLATES);
+      expect(INIT_DIRS).toContain(CERTS_DIR);
+      expect(INIT_DIRS).toContain(TRAEFIK_DIR);
+      expect(INIT_DIRS).toContain(TRAEFIK_DYNAMIC_DIR);
+      expect(INIT_DIRS).toContain(TRAEFIK_CERTS_DIR);
     });
 
     it('should have correct number of directories', () => {
-      expect(INIT_DIRS.length).toBe(8);
+      expect(INIT_DIRS.length).toBe(12);
     });
   });
 });

@@ -99,5 +99,5 @@ export function saveConfig(config: PanopticonConfig): void {
 }
 
 export function getDefaultConfig(): PanopticonConfig {
-  return { ...DEFAULT_CONFIG };
+  return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 }

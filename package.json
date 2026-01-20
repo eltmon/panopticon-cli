@@ -44,7 +44,13 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "vitest",
+    "test": "vitest --no-file-parallelism",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "test:coverage": "vitest run --coverage",
+    "docs": "typedoc",
+    "docs:watch": "typedoc --watch",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -61,9 +67,11 @@
   "devDependencies": {
     "@types/inquirer": "^9.0.9",
     "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^1.0.4",
     "eslint": "^8.55.0",
     "tsup": "^8.0.1",
     "tsx": "^4.6.2",
+    "typedoc": "^0.25.0",
     "typescript": "^5.3.2",
     "vitest": "^1.0.4"
   }
