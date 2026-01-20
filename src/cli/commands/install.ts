@@ -153,9 +153,18 @@ function checkPrerequisites(): { results: PrereqResult[]; allPassed: boolean } {
     fix: 'cargo install beads-cli',
   });
 
+  // ttyd (web terminal for planning sessions)
+  const hasTtyd = checkCommand('ttyd') || existsSync(join(homedir(), 'bin', 'ttyd'));
+  results.push({
+    name: 'ttyd',
+    passed: hasTtyd,
+    message: hasTtyd ? 'installed' : 'not found',
+    fix: 'brew install ttyd / Download from https://github.com/tsl0922/ttyd/releases',
+  });
+
   return {
     results,
-    allPassed: results.filter((r) => r.name !== 'mkcert').every((r) => r.passed),
+    allPassed: results.filter((r) => r.name !== 'mkcert' && r.name !== 'ttyd').every((r) => r.passed),
   };
 }
 
@@ -247,7 +256,47 @@ async function installCommand(options: InstallOptions): Promise<void> {
     }
   }
 
-  // Step 5: Setup Traefik configuration
+  // Step 5: Install ttyd (web terminal for planning sessions)
+  const hasTtyd = checkCommand('ttyd') || existsSync(join(homedir(), 'bin', 'ttyd'));
+  if (!hasTtyd) {
+    spinner.start('Installing ttyd (web terminal)...');
+    try {
+      const binDir = join(homedir(), 'bin');
+      mkdirSync(binDir, { recursive: true });
+      const ttydPath = join(binDir, 'ttyd');
+
+      // Determine platform and download appropriate binary
+      const plat = detectPlatform();
+      let downloadUrl = '';
+      if (plat === 'darwin') {
+        // macOS - try homebrew first
+        try {
+          execSync('brew install ttyd', { stdio: 'pipe' });
+          spinner.succeed('ttyd installed via Homebrew');
+        } catch {
+          spinner.warn('ttyd installation failed - install manually: brew install ttyd');
+        }
+      } else {
+        // Linux/WSL - download binary
+        downloadUrl = 'https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64';
+        try {
+          execSync(`curl -sL "${downloadUrl}" -o "${ttydPath}" && chmod +x "${ttydPath}"`, {
+            stdio: 'pipe',
+            timeout: 60000,
+          });
+          spinner.succeed(`ttyd installed to ${ttydPath}`);
+        } catch (error) {
+          spinner.warn('ttyd download failed - install manually from https://github.com/tsl0922/ttyd/releases');
+        }
+      }
+    } catch (error) {
+      spinner.warn('ttyd installation failed (planning sessions will not work)');
+    }
+  } else {
+    spinner.info('ttyd already installed');
+  }
+
+  // Step 6: Setup Traefik configuration
   if (!options.minimal) {
     spinner.start('Setting up Traefik configuration...');
 

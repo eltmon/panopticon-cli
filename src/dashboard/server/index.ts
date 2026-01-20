@@ -1,7 +1,10 @@
 import express from 'express';
 import cors from 'cors';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+import * as pty from 'node-pty';
 import { execSync, spawn } from 'child_process';
-import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync, renameSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 
@@ -119,7 +122,7 @@ function spawnPanCommand(args: string[], description: string, cwd?: string): str
 }
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '3002', 10);
+const PORT = parseInt(process.env.PORT || '3011', 10);
 
 app.use(cors());
 app.use(express.json());
@@ -2950,14 +2953,36 @@ Start by exploring the codebase to understand the context, then begin the discov
       // Determine working directory - use workspace if created, otherwise project root
       const agentCwd = workspaceCreated ? workspacePath : projectPath;
 
-      // Start tmux session with Claude Code for planning
-      // Use --print with stream-json for capturable output (TUI can't be captured)
-      const outputFile = join(planningDir, 'output.jsonl');
-      const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions --print --verbose --output-format stream-json -p "${planningPromptPath}" 2>&1 | tee "${outputFile}"`;
+      // Start tmux session with Claude Code for planning (interactive TUI mode)
+      // Just start Claude interactively - the prompt file is in the workspace for reference
+      const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions`;
 
       // Ensure tmux is running before starting session
       ensureTmuxRunning();
       execSync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
+
+      // Resize the tmux window to be wide enough for Claude's TUI
+      try {
+        execSync(`tmux resize-window -t ${sessionName} -x 200 -y 50 2>/dev/null`, { encoding: 'utf-8' });
+      } catch {
+        // Ignore resize errors
+      }
+
+      // Wait for Claude to initialize, then send the planning prompt
+      setTimeout(() => {
+        try {
+          // Send a short message that tells Claude to read the prompt file
+          const initMessage = `Please read the planning prompt file at ${planningPromptPath} and begin the planning session for ${issue.identifier}: ${issue.title}`;
+          // Escape special characters for tmux send-keys
+          const escapedMessage = initMessage.replace(/'/g, "'\\''");
+          // CRITICAL: Send text and Enter as SEPARATE commands!
+          execSync(`tmux send-keys -t ${sessionName} '${escapedMessage}'`, { encoding: 'utf-8' });
+          execSync(`tmux send-keys -t ${sessionName} Enter`, { encoding: 'utf-8' });
+          console.log(`Sent planning prompt to ${sessionName}`);
+        } catch (err) {
+          console.error('Failed to send planning prompt:', err);
+        }
+      }, 3000); // Wait 3 seconds for Claude to fully initialize
 
       planningAgentStarted = true;
     } catch (err: any) {
@@ -3004,148 +3029,9 @@ app.get('/api/planning/:issueId/status', (req, res) => {
 
     const sessionExists = sessions.includes(sessionName);
 
-    // Read output from the streaming JSON log file (even if session ended)
-    let output = '';
-    try {
-      // Find output file - check workspace first, then legacy planning directories
-      const possibleOutputPaths: string[] = [];
-      const issueLower = issueId.toLowerCase();
-
-      // Check workspace locations first (new git-backed planning)
-      const workspaceLocations = [
-        join(homedir(), 'projects', 'panopticon', 'workspaces', `feature-${issueLower}`, '.planning', 'output.jsonl'),
-        join(homedir(), 'projects', 'myn', 'workspaces', `feature-${issueLower}`, '.planning', 'output.jsonl'),
-      ];
-      possibleOutputPaths.push(...workspaceLocations);
-
-      // Legacy planning directories (fallback)
-      possibleOutputPaths.push(
-        join(homedir(), 'projects', 'panopticon', '.planning', issueLower, 'output.jsonl'),
-        join(homedir(), 'projects', 'myn', '.planning', issueLower, 'output.jsonl'),
-      );
-
-      // Also check GitHub local paths (both workspace and legacy)
-      const githubCheck = isGitHubIssue(issueId);
-      if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
-        const localPaths = getGitHubLocalPaths();
-        const projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`];
-        if (projectPath) {
-          // Workspace first
-          possibleOutputPaths.unshift(join(projectPath, 'workspaces', `feature-${issueLower}`, '.planning', 'output.jsonl'));
-          // Legacy fallback
-          possibleOutputPaths.push(join(projectPath, '.planning', issueLower, 'output.jsonl'));
-        }
-      }
-
-      for (const outputPath of possibleOutputPaths) {
-        if (existsSync(outputPath)) {
-          const planningDir = dirname(outputPath);
-
-          // Find all output files (backups + current) and read them in order
-          const allOutputFiles: string[] = [];
-          const files = readdirSync(planningDir);
-
-          // Get backup files sorted by timestamp (oldest first)
-          const backupFiles = files
-            .filter(f => f.startsWith('output-') && f.endsWith('.jsonl'))
-            .sort(); // Sorts by timestamp since format is output-{timestamp}.jsonl
-
-          for (const backup of backupFiles) {
-            allOutputFiles.push(join(planningDir, backup));
-          }
-
-          // Add current output file last
-          if (existsSync(outputPath)) {
-            allOutputFiles.push(outputPath);
-          }
-
-          // Parse all output files and combine
-          const textParts: string[] = [];
-
-          for (const filePath of allOutputFiles) {
-            // Add separator between sessions (except for first)
-            if (textParts.length > 0) {
-              textParts.push('\n\n---\n\n**Continuation:**\n\n');
-            }
-
-            const content = readFileSync(filePath, 'utf-8');
-            // Parse streaming JSON lines and extract text content
-            const lines = content.split('\n').filter(line => line.trim());
-
-            for (const line of lines) {
-              try {
-                const json = JSON.parse(line);
-                // Extract text from various message types
-                if (json.type === 'assistant' && json.message?.content) {
-                  for (const block of json.message.content) {
-                    if (block.type === 'text') {
-                      textParts.push(block.text + '\n');
-                    } else if (block.type === 'tool_use') {
-                      // Format tool use with relevant details
-                      const input = block.input || {};
-                      let detail = '';
-                      switch (block.name) {
-                        case 'Read':
-                          detail = input.file_path ? ` \`${input.file_path}\`` : '';
-                          break;
-                        case 'Bash':
-                          const cmd = input.command || '';
-                          detail = cmd ? ` \`${cmd.length > 60 ? cmd.slice(0, 60) + '...' : cmd}\`` : '';
-                          break;
-                        case 'Task':
-                          detail = input.description ? ` - ${input.description}` : '';
-                          break;
-                        case 'Edit':
-                        case 'Write':
-                          detail = input.file_path ? ` \`${input.file_path}\`` : '';
-                          break;
-                        case 'Grep':
-                          detail = input.pattern ? ` for \`${input.pattern}\`` : '';
-                          break;
-                        case 'Glob':
-                          detail = input.pattern ? ` \`${input.pattern}\`` : '';
-                          break;
-                      }
-                      textParts.push(`\n🔧 **${block.name}**${detail}\n`);
-                    }
-                  }
-                } else if (json.type === 'result' && json.result) {
-                  // Skip content_block_delta - we get complete text from 'assistant' messages
-                  // Deltas are streaming chunks that duplicate the final content
-                  // Format result - stringify if it's an object
-                  const resultText = typeof json.result === 'object'
-                    ? JSON.stringify(json.result, null, 2)
-                    : String(json.result);
-                  // Only show result if it's meaningful (not just empty or short status)
-                  if (resultText.length > 50 || resultText.includes('error')) {
-                    textParts.push(`\n\`\`\`\n${resultText}\n\`\`\`\n`);
-                  }
-                }
-              } catch (e) {
-                // Skip unparseable lines
-              }
-            }
-          } // End of allOutputFiles loop
-
-          output = textParts.join('');
-          break;
-        }
-      }
-
-      // If no output file found, try tmux capture as fallback
-      if (!output) {
-        output = execSync(`tmux capture-pane -t ${sessionName} -p -S -50 2>/dev/null || echo ""`, {
-          encoding: 'utf-8',
-        });
-      }
-    } catch (e) {
-      // Capture failed, leave output empty
-    }
-
     res.json({
       active: sessionExists,
       sessionName,
-      recentOutput: output,
     });
   } catch (error: any) {
     res.json({
@@ -3156,80 +3042,19 @@ app.get('/api/planning/:issueId/status', (req, res) => {
   }
 });
 
-// Send message to planning session
-app.post('/api/planning/:issueId/message', (req, res) => {
+// Send message to planning session - starts a new Claude run with context
+app.post('/api/planning/:issueId/message', async (req, res) => {
   const { issueId } = req.params;
   const { message } = req.body;
   const sessionName = `planning-${issueId.toLowerCase()}`;
+  const issueLower = issueId.toLowerCase();
 
   if (!message) {
     return res.status(400).json({ error: 'Message required' });
   }
 
   try {
-    // Check if session exists first
-    const sessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
-      encoding: 'utf-8',
-    }).trim().split('\n').filter(Boolean);
-
-    if (!sessions.includes(sessionName)) {
-      return res.status(404).json({
-        error: 'Planning session ended',
-        sessionEnded: true,
-        hint: 'Use "Continue Planning" to start a new session'
-      });
-    }
-
-    // Send message to tmux session
-    execSync(`tmux send-keys -t ${sessionName} "${message.replace(/"/g, '\\"')}"`, { encoding: 'utf-8' });
-    execSync(`tmux send-keys -t ${sessionName} Enter`, { encoding: 'utf-8' });
-
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to send message: ' + error.message });
-  }
-});
-
-// Stop planning session (just kills tmux, doesn't revert state)
-app.delete('/api/planning/:issueId', (req, res) => {
-  const { issueId } = req.params;
-  const sessionName = `planning-${issueId.toLowerCase()}`;
-
-  try {
-    execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to stop planning: ' + error.message });
-  }
-});
-
-// Remove "planning" label from GitHub issue
-async function removeGitHubPlanningLabel(owner: string, repo: string, number: number): Promise<void> {
-  const config = getGitHubConfig();
-  if (!config) throw new Error('GitHub not configured');
-
-  await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/planning`, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': `token ${config.token}`,
-      'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'Panopticon-Dashboard',
-    },
-  });
-}
-
-// Continue planning - starts new session with user response as context
-app.post('/api/issues/:id/continue-planning', async (req, res) => {
-  const { id } = req.params;
-  const { response } = req.body;
-  const sessionName = `planning-${id.toLowerCase()}`;
-
-  if (!response) {
-    return res.status(400).json({ error: 'Response is required' });
-  }
-
-  try {
-    // Kill any existing session
+    // Kill any existing session first (Claude with --print will have exited anyway)
     try {
       execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
     } catch (e) {
@@ -3237,8 +3062,7 @@ app.post('/api/issues/:id/continue-planning', async (req, res) => {
     }
 
     // Find planning directory - check workspace first, then legacy
-    const githubCheck = isGitHubIssue(id);
-    const issueLower = id.toLowerCase();
+    const githubCheck = isGitHubIssue(issueId);
     let projectPath = '';
     let planningDir = '';
     let workspacePath = '';
@@ -3281,12 +3105,12 @@ app.post('/api/issues/:id/continue-planning', async (req, res) => {
     } else if (existsSync(legacyPlanningDir)) {
       planningDir = legacyPlanningDir;
     } else {
-      return res.status(404).json({ error: 'Planning directory not found' });
+      return res.status(404).json({ error: 'Planning directory not found', sessionEnded: true });
     }
 
     const outputFile = join(planningDir, 'output.jsonl');
 
-    // Read previous output to get FULL context (including tool results)
+    // Read previous output to get FULL context
     let conversationLog = '';
     if (existsSync(outputFile)) {
       const content = readFileSync(outputFile, 'utf-8');
@@ -3304,12 +3128,11 @@ app.post('/api/issues/:id/continue-planning', async (req, res) => {
                 logParts.push(`**Assistant:**\n${block.text}`);
               } else if (block.type === 'tool_use') {
                 const input = block.input || {};
-                // Skip reads of CONTINUATION_PROMPT.md to prevent recursive nesting
+                // Skip reads of CONTINUATION_PROMPT.md
                 if (block.name === 'Read' && input.file_path?.includes('CONTINUATION_PROMPT.md')) {
                   continue;
                 }
                 let toolInfo = `**Tool: ${block.name}**`;
-                // Include key tool parameters
                 if (block.name === 'Read' && input.file_path) {
                   toolInfo += `\nFile: ${input.file_path}`;
                 } else if (block.name === 'Bash' && input.command) {
@@ -3324,14 +3147,13 @@ app.post('/api/issues/:id/continue-planning', async (req, res) => {
             }
           }
 
-          // Tool results (what files contained, command outputs, etc.) - FULL content for context preservation
+          // Tool results
           if (json.type === 'user' && json.message?.content) {
             for (const block of json.message.content) {
               if (block.type === 'tool_result' && block.content) {
                 const resultText = typeof block.content === 'string'
                   ? block.content
                   : JSON.stringify(block.content);
-                // Skip tool results that contain CONTINUATION_PROMPT content (prevents recursion)
                 if (resultText.includes('# Continuation of Planning Session:')) {
                   continue;
                 }
@@ -3346,9 +3168,9 @@ app.post('/api/issues/:id/continue-planning', async (req, res) => {
       conversationLog = logParts.join('\n\n');
     }
 
-    // Create continuation prompt with full context
+    // Create continuation prompt
     const continuationPromptPath = join(planningDir, 'CONTINUATION_PROMPT.md');
-    const continuationPrompt = `# Continuation of Planning Session: ${id.toUpperCase()}
+    const continuationPrompt = `# Continuation of Planning Session: ${issueId.toUpperCase()}
 
 ## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
 
@@ -3356,18 +3178,12 @@ app.post('/api/issues/:id/continue-planning', async (req, res) => {
 - Write or modify any code files
 - Run implementation commands (npm install, docker, etc.)
 - Create actual features or functionality
-- Update the issue status to "In Progress"
 
 **YOU SHOULD ONLY:**
 - Ask clarifying questions
 - Explore the codebase to understand context
-- Generate planning artifacts:
-  - STATE.md (decisions and approach)
-  - Beads tasks (via \`bd create\`)
-  - Architecture diagrams or notes
-- Present options and tradeoffs for the user to decide
-
-When planning is complete, STOP and tell the user "Planning complete - click Done when ready to hand off to an agent for implementation."
+- Generate planning artifacts (STATE.md, Beads tasks via \`bd create\`)
+- Present options and tradeoffs
 
 ---
 
@@ -3379,266 +3195,68 @@ ${conversationLog}
 
 ## User's Response
 
-${response}
+${message}
 
 ---
 
 ## Your Task
 
 Continue the PLANNING session. Do NOT implement anything.
-
-1. If more info is needed, ask focused questions
-2. If you have enough info, generate planning artifacts (STATE.md, beads tasks)
-3. When done, summarize and wait for user to click "Done"
 `;
 
     writeFileSync(continuationPromptPath, continuationPrompt);
 
-    // Determine working directory (use workspace if exists)
+    // Determine working directory
     const agentCwd = existsSync(workspacePath) ? workspacePath : projectPath;
 
-    // Clear old output and start new session
+    // Backup old output and start new session
     if (existsSync(outputFile)) {
-      // Backup old output
       const backupPath = join(planningDir, `output-${Date.now()}.jsonl`);
       renameSync(outputFile, backupPath);
     }
 
     const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions --print --verbose --output-format stream-json -p "${continuationPromptPath}" 2>&1 | tee "${outputFile}"`;
 
-    // Ensure tmux is running before starting session
     ensureTmuxRunning();
     execSync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
 
-    res.json({
-      success: true,
-      sessionName,
-      message: 'Planning session continued',
-    });
+    res.json({ success: true, sessionName, message: 'Planning session continued' });
   } catch (error: any) {
-    console.error('Error continuing planning:', error);
-    res.status(500).json({ error: 'Failed to continue planning: ' + error.message });
+    console.error('Error sending message:', error);
+    res.status(500).json({ error: 'Failed to send message: ' + error.message });
   }
 });
 
-// Push planning - commit and push planning artifacts to remote
-app.post('/api/issues/:id/push-planning', (req, res) => {
-  const { id } = req.params;
-  const { message } = req.body || {};
-  const issueLower = id.toLowerCase();
+// Stop planning session (kills tmux session)
+app.delete('/api/planning/:issueId', (req, res) => {
+  const { issueId } = req.params;
+  const sessionName = `planning-${issueId.toLowerCase()}`;
 
   try {
-    // Find workspace
-    const possibleWorkspaces = [
-      join(homedir(), 'projects', 'panopticon', 'workspaces', `feature-${issueLower}`),
-      join(homedir(), 'projects', 'myn', 'workspaces', `feature-${issueLower}`),
-    ];
+    // Kill tmux session
+    execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
 
-    // Check GitHub paths
-    const githubCheck = isGitHubIssue(id);
-    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
-      const localPaths = getGitHubLocalPaths();
-      const projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`];
-      if (projectPath) {
-        possibleWorkspaces.unshift(join(projectPath, 'workspaces', `feature-${issueLower}`));
-      }
-    }
-
-    let workspacePath = '';
-    for (const ws of possibleWorkspaces) {
-      if (existsSync(join(ws, '.planning'))) {
-        workspacePath = ws;
-        break;
-      }
-    }
-
-    if (!workspacePath) {
-      return res.status(404).json({ error: 'No workspace with planning found' });
-    }
-
-    // Get branch name
-    const branchName = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: workspacePath,
-      encoding: 'utf-8',
-    }).trim();
-
-    // Stage planning files
-    execSync('git add .planning', { cwd: workspacePath, encoding: 'utf-8' });
-
-    // Check if there are changes to commit
-    const status = execSync('git status --porcelain .planning', {
-      cwd: workspacePath,
-      encoding: 'utf-8',
-    }).trim();
-
-    let committed = false;
-    if (status) {
-      // Commit
-      const commitMsg = message || `Planning: ${id.toUpperCase()} - ${new Date().toISOString()}`;
-      execSync(`git commit -m "${commitMsg}"`, { cwd: workspacePath, encoding: 'utf-8' });
-      committed = true;
-    }
-
-    // Push to origin
-    execSync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
-
-    res.json({
-      success: true,
-      workspacePath,
-      branchName,
-      committed,
-      message: committed ? 'Planning committed and pushed' : 'Planning pushed (no new changes to commit)',
-    });
+    res.json({ success: true });
   } catch (error: any) {
-    console.error('Error pushing planning:', error);
-    res.status(500).json({ error: 'Failed to push planning: ' + error.message });
+    res.status(500).json({ error: 'Failed to stop planning: ' + error.message });
   }
 });
 
-// Sync planning - pull latest from remote before resuming
-app.post('/api/issues/:id/sync-planning', (req, res) => {
-  const { id } = req.params;
-  const issueLower = id.toLowerCase();
+// Remove "planning" label from GitHub issue
+async function removeGitHubPlanningLabel(owner: string, repo: string, number: number): Promise<void> {
+  const config = getGitHubConfig();
+  if (!config) throw new Error('GitHub not configured');
 
-  try {
-    // Find workspace or project path
-    const possibleWorkspaces = [
-      join(homedir(), 'projects', 'panopticon', 'workspaces', `feature-${issueLower}`),
-      join(homedir(), 'projects', 'myn', 'workspaces', `feature-${issueLower}`),
-    ];
+  await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}/labels/planning`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `token ${config.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'Panopticon-Dashboard',
+    },
+  });
+}
 
-    // Check GitHub paths
-    const githubCheck = isGitHubIssue(id);
-    let projectPath = '';
-    if (githubCheck.isGitHub && githubCheck.owner && githubCheck.repo) {
-      const localPaths = getGitHubLocalPaths();
-      projectPath = localPaths[`${githubCheck.owner}/${githubCheck.repo}`] || '';
-      if (projectPath) {
-        possibleWorkspaces.unshift(join(projectPath, 'workspaces', `feature-${issueLower}`));
-      }
-    } else {
-      // Try to find project path for Linear issues
-      const paths = [
-        join(homedir(), 'projects', 'panopticon'),
-        join(homedir(), 'projects', 'myn'),
-      ];
-      for (const p of paths) {
-        if (existsSync(join(p, 'workspaces', `feature-${issueLower}`))) {
-          projectPath = p;
-          break;
-        }
-      }
-    }
-
-    let workspacePath = '';
-    for (const ws of possibleWorkspaces) {
-      if (existsSync(ws)) {
-        workspacePath = ws;
-        break;
-      }
-    }
-
-    // If no workspace exists, check if remote branch exists and create workspace
-    if (!workspacePath && projectPath) {
-      const branchName = `feature/${issueLower}`;
-      try {
-        // Check if remote branch exists
-        const remoteCheck = execSync(`git ls-remote --heads origin ${branchName}`, {
-          cwd: projectPath,
-          encoding: 'utf-8',
-        }).trim();
-
-        if (remoteCheck) {
-          // Remote branch exists - create workspace from it
-          workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
-          execSync(`git fetch origin ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
-          execSync(`git worktree add "${workspacePath}" origin/${branchName}`, {
-            cwd: projectPath,
-            encoding: 'utf-8',
-          });
-
-          return res.json({
-            success: true,
-            action: 'created',
-            workspacePath,
-            message: 'Created workspace from remote branch',
-            hasPlanning: existsSync(join(workspacePath, '.planning')),
-          });
-        }
-      } catch (e) {
-        // Remote branch doesn't exist, that's fine
-      }
-
-      return res.json({
-        success: true,
-        action: 'none',
-        message: 'No workspace or remote branch found',
-      });
-    }
-
-    if (!workspacePath) {
-      return res.json({
-        success: true,
-        action: 'none',
-        message: 'No workspace found',
-      });
-    }
-
-    // Verify workspace is a valid git repo (worktree)
-    const gitFile = join(workspacePath, '.git');
-    if (!existsSync(gitFile)) {
-      // Workspace directory exists but is not a git worktree - it's corrupted
-      return res.json({
-        success: false,
-        action: 'corrupted',
-        workspacePath,
-        message: 'Workspace exists but is not a valid git worktree. Please remove and recreate.',
-        suggestion: `rm -rf "${workspacePath}" && pan workspace create ${id}`,
-      });
-    }
-
-    // Workspace exists - fetch and check if behind
-    const branchName = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: workspacePath,
-      encoding: 'utf-8',
-    }).trim();
-
-    execSync('git fetch origin', { cwd: workspacePath, encoding: 'utf-8' });
-
-    // Check if we're behind
-    const behindCount = execSync(`git rev-list HEAD..origin/${branchName} --count 2>/dev/null || echo "0"`, {
-      cwd: workspacePath,
-      encoding: 'utf-8',
-    }).trim();
-
-    if (parseInt(behindCount, 10) > 0) {
-      // Pull changes
-      execSync(`git pull origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
-
-      return res.json({
-        success: true,
-        action: 'pulled',
-        workspacePath,
-        branchName,
-        commitsPulled: parseInt(behindCount, 10),
-        message: `Pulled ${behindCount} commit(s) from remote`,
-        hasPlanning: existsSync(join(workspacePath, '.planning')),
-      });
-    }
-
-    res.json({
-      success: true,
-      action: 'up-to-date',
-      workspacePath,
-      branchName,
-      message: 'Already up to date',
-      hasPlanning: existsSync(join(workspacePath, '.planning')),
-    });
-  } catch (error: any) {
-    console.error('Error syncing planning:', error);
-    res.status(500).json({ error: 'Failed to sync: ' + error.message });
-  }
-});
 
 // Abort planning - reverts state to Todo and kills session
 app.post('/api/issues/:id/abort-planning', async (req, res) => {
@@ -4120,6 +3738,109 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+// Create HTTP server and attach WebSocket server for terminal
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/terminal' });
+
+// Track active PTY sessions
+const activePtys = new Map<string, pty.IPty>();
+
+wss.on('connection', (ws: WebSocket, req) => {
+  // Parse session name from URL query param: /ws/terminal?session=planning-min-123
+  const url = new URL(req.url || '', `http://${req.headers.host}`);
+  const sessionName = url.searchParams.get('session');
+
+  if (!sessionName) {
+    ws.close(1008, 'Session name required');
+    return;
+  }
+
+  console.log(`WebSocket connected for session: ${sessionName}`);
+
+  // Check if tmux session exists
+  try {
+    const sessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
+      encoding: 'utf-8',
+    }).trim().split('\n').filter(Boolean);
+
+    if (!sessions.includes(sessionName)) {
+      ws.close(1008, `Session ${sessionName} not found`);
+      return;
+    }
+  } catch {
+    ws.close(1008, 'Failed to list tmux sessions');
+    return;
+  }
+
+  // Spawn a PTY that attaches to the tmux session
+  // The PTY will receive the full screen content including alternate buffer
+  const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', sessionName], {
+    name: 'xterm-256color',
+    cols: 120,
+    rows: 40,
+    cwd: homedir(),
+    env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' } as { [key: string]: string },
+  });
+
+  activePtys.set(sessionName, ptyProcess);
+
+  // Forward PTY output to WebSocket
+  ptyProcess.onData((data) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  });
+
+  // Handle PTY exit
+  ptyProcess.onExit(({ exitCode }) => {
+    console.log(`PTY for ${sessionName} exited with code ${exitCode}`);
+    activePtys.delete(sessionName);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(1000, 'Session ended');
+    }
+  });
+
+  // Forward WebSocket input to PTY
+  ws.on('message', (data) => {
+    const message = data.toString();
+
+    // Handle resize messages (JSON format: {"type":"resize","cols":80,"rows":24})
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+        // Resize both PTY and tmux window
+        ptyProcess.resize(parsed.cols, parsed.rows);
+        try {
+          execSync(`tmux resize-window -t ${sessionName} -x ${parsed.cols} -y ${parsed.rows} 2>/dev/null || true`, { encoding: 'utf-8' });
+        } catch { /* ignore */ }
+        return;
+      }
+    } catch {
+      // Not JSON, treat as terminal input
+    }
+
+    ptyProcess.write(message);
+  });
+
+  // Clean up on WebSocket close
+  ws.on('close', () => {
+    console.log(`WebSocket closed for session: ${sessionName}`);
+    // Detach from tmux (Ctrl-b d) before killing PTY to leave tmux session running
+    ptyProcess.write('\x02d'); // Ctrl-b d
+    setTimeout(() => {
+      ptyProcess.kill();
+      activePtys.delete(sessionName);
+    }, 100);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`WebSocket error for ${sessionName}:`, err);
+    ptyProcess.kill();
+    activePtys.delete(sessionName);
+  });
+});
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Panopticon API server running on http://0.0.0.0:${PORT}`);
+  console.log(`WebSocket terminal available at ws://0.0.0.0:${PORT}/ws/terminal`);
 });

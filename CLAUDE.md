@@ -15,8 +15,8 @@ Panopticon is a multi-agent orchestration framework for AI coding assistants. It
 | Directory | Purpose |
 |-----------|---------|
 | `src/cli/` | CLI commands (`pan work`, `pan sync`, etc.) |
-| `src/dashboard/frontend/` | React dashboard (port 3001) |
-| `src/dashboard/server/` | Express API server (port 3002) |
+| `src/dashboard/frontend/` | React dashboard (port 3010) |
+| `src/dashboard/server/` | Express API server (port 3011) |
 | `~/.panopticon/skills/` | Skills distributed with Panopticon |
 | `~/.panopticon/agents/` | Per-agent state and health |
 
@@ -49,8 +49,8 @@ pan sync  # Distribute to all AI tools
 ```bash
 # Start in dev mode (hot reload)
 cd src/dashboard && npm run dev
-# Frontend: http://localhost:3001
-# API: http://localhost:3002
+# Frontend: http://localhost:3010
+# API: http://localhost:3011
 
 # Rebuild backend after changes
 cd src/dashboard/server && npm run build
@@ -72,4 +72,4 @@ node dist/cli/index.js skills
 No automated tests yet. Manual testing:
 1. `pan doctor` - Health check
 2. `pan sync --dry-run` - Skill sync preview
-3. Dashboard - Test UI changes at localhost:3001
+3. Dashboard - Test UI changes at localhost:3010

@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { X, Loader2, CheckCircle2, AlertCircle, Sparkles, Play, MessageCircle, Terminal, Send, Square, Upload, Download } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { X, Loader2, CheckCircle2, AlertCircle, Sparkles, Play, Terminal, Square } from 'lucide-react';
 import { Issue } from '../types';
+import { XTerminal } from './XTerminal';
 
 interface PlanDialogProps {
   issue: Issue;
@@ -34,18 +34,15 @@ interface StartPlanningResult {
 interface PlanningStatus {
   active: boolean;
   sessionName: string;
-  recentOutput?: string;
   error?: string;
 }
 
-type Step = 'ready' | 'syncing' | 'starting' | 'planning' | 'viewing' | 'complete' | 'error';
+type Step = 'ready' | 'starting' | 'planning' | 'complete' | 'error';
 
 export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogProps) {
   const [step, setStep] = useState<Step>('ready');
   const [result, setResult] = useState<StartPlanningResult | null>(null);
-  const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const outputRef = useRef<HTMLDivElement>(null);
 
   // Start planning mutation
   const startPlanningMutation = useMutation({
@@ -84,37 +81,8 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
       if (!res.ok) throw new Error('Failed to get status');
       return res.json() as Promise<PlanningStatus>;
     },
-    enabled: step === 'planning' || step === 'viewing',
+    enabled: step === 'planning',
     refetchInterval: step === 'planning' ? 2000 : false, // Only poll during active session
-  });
-
-  // Send message mutation
-  const sendMessageMutation = useMutation({
-    mutationFn: async (msg: string) => {
-      const res = await fetch(`/api/planning/${issue.identifier}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        // Check if session ended - switch to viewing mode
-        if (data.sessionEnded) {
-          throw new Error('SESSION_ENDED');
-        }
-        throw new Error(data.error || 'Failed to send message');
-      }
-      return data;
-    },
-    onSuccess: () => {
-      setMessage('');
-    },
-    onError: (err: Error) => {
-      if (err.message === 'SESSION_ENDED') {
-        // Session ended, switch to viewing mode
-        setStep('viewing');
-      }
-    },
   });
 
   // Stop planning mutation (keeps state as "In Planning")
@@ -128,29 +96,6 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
     },
     onSuccess: () => {
       setStep('complete');
-    },
-  });
-
-  // Continue planning mutation (continues with user response)
-  const continuePlanningMutation = useMutation({
-    mutationFn: async (userResponse: string) => {
-      const res = await fetch(`/api/issues/${issue.identifier}/continue-planning`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ response: userResponse }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to continue planning');
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      setMessage('');
-      setStep('planning'); // Switch back to active planning view
-    },
-    onError: (err: Error) => {
-      setError(err.message);
     },
   });
 
@@ -200,133 +145,45 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
     },
   });
 
-  // Push planning to remote
-  const pushPlanningMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/issues/${issue.identifier}/push-planning`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to push planning');
-      }
-      return res.json();
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-    },
-  });
-
-  // Sync planning from remote
-  const syncPlanningMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/issues/${issue.identifier}/sync-planning`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to sync planning');
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      if (data.action === 'pulled' || data.action === 'created') {
-        // Refresh status to show new planning data
-        statusQuery.refetch();
-      }
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-    },
-  });
-
-  // Scroll to bottom of output
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [statusQuery.data?.recentOutput]);
-
-  // Auto-switch to viewing when session ends while in planning step
-  useEffect(() => {
-    if (step === 'planning' && statusQuery.data && !statusQuery.data.active && statusQuery.data.recentOutput) {
-      // Session ended but we have output - switch to viewing
-      setStep('viewing');
-    }
-  }, [step, statusQuery.data]);
-
   // Reset state when dialog closes
   useEffect(() => {
     if (!isOpen) {
       setStep('ready');
       setResult(null);
-      setMessage('');
       setError(null);
     }
   }, [isOpen]);
 
   // Check if planning session already exists when dialog opens
-  // Also sync from remote in case someone else pushed updates
   useEffect(() => {
     if (isOpen && step === 'ready') {
-      // Show syncing state while we check
-      setStep('syncing');
-
-      // First sync from remote to get any updates
-      fetch(`/api/issues/${issue.identifier}/sync-planning`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
+      // Check planning status
+      fetch(`/api/planning/${issue.identifier}/status`)
         .then(res => res.json())
-        .then((syncData) => {
-          // Then check planning status
-          return fetch(`/api/planning/${issue.identifier}/status`)
-            .then(res => res.json())
-            .then((data: PlanningStatus) => {
-              if (data.active) {
-                // Session is running
-                setStep('planning');
-              } else if (data.recentOutput && ['Planned', 'Ready'].includes(issue.status)) {
-                // Session ended with output AND issue is in a "completed planning" state
-                // Show the viewing step so they can review the plan
-                setStep('viewing');
-              } else {
-                // All other cases: go to ready which shows appropriate start/resume options
-                // - "In Planning" -> shows Resume/Abort
-                // - "In Progress" -> shows Start Planning (re-plan from scratch)
-                // - "Todo" -> shows Start Planning
-                setStep('ready');
-              }
-              // Show sync result if something was pulled
-              if (syncData.action === 'pulled') {
-                console.log(`Synced: ${syncData.message}`);
-              } else if (syncData.action === 'created') {
-                console.log(`Created workspace from remote: ${syncData.message}`);
-              }
-            });
+        .then((data: PlanningStatus) => {
+          if (data.active) {
+            // Session is running - connect to it
+            setStep('planning');
+          }
+          // Otherwise stay on 'ready' step
         })
         .catch(() => {
-          // On error, go back to ready
-          setStep('ready');
+          // On error, stay on ready
         });
     }
-  }, [isOpen, issue.identifier]);
+  }, [isOpen, issue.identifier, step]);
+
+  // Watch for session ending while in planning step
+  useEffect(() => {
+    if (step === 'planning' && statusQuery.data && !statusQuery.data.active) {
+      // Session is no longer active - it ended or was stopped
+      setStep('complete');
+    }
+  }, [step, statusQuery.data]);
 
   const handleStartPlanning = () => {
     setStep('starting');
     startPlanningMutation.mutate();
-  };
-
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (message.trim()) {
-      sendMessageMutation.mutate(message.trim());
-    }
   };
 
   const handleStopPlanning = () => {
@@ -495,227 +352,74 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
             </div>
           )}
 
-          {/* Syncing step - checking for remote updates and existing session */}
-          {step === 'syncing' && (
-            <div className="flex-1 flex flex-col p-8">
-              {/* Skeleton header */}
-              <div className="flex items-center gap-4 mb-6">
-                <div className="w-20 h-20 rounded-2xl bg-gray-700 animate-pulse" />
-                <div className="flex-1 space-y-3">
-                  <div className="h-6 bg-gray-700 rounded animate-pulse w-48" />
-                  <div className="h-4 bg-gray-700 rounded animate-pulse w-64" />
-                </div>
-              </div>
-
-              {/* Skeleton content area */}
-              <div className="flex-1 space-y-4">
-                <div className="h-4 bg-gray-700 rounded animate-pulse w-full" />
-                <div className="h-4 bg-gray-700 rounded animate-pulse w-5/6" />
-                <div className="h-4 bg-gray-700 rounded animate-pulse w-4/5" />
-                <div className="h-4 bg-gray-700 rounded animate-pulse w-full" />
-                <div className="h-4 bg-gray-700 rounded animate-pulse w-3/4" />
-              </div>
-
-              {/* Loading indicator */}
-              <div className="flex items-center justify-center gap-2 mt-6 text-gray-400">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-sm">Checking for existing session...</span>
-              </div>
-            </div>
-          )}
-
-          {/* Planning step - active session */}
+          {/* Planning step - active session with web terminal */}
           {step === 'planning' && (
             <>
-              {/* Terminal output */}
-              <div
-                ref={outputRef}
-                className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-gray-900"
-              >
-                {statusQuery.data?.recentOutput ? (
-                  <div className="prose prose-invert prose-sm max-w-none text-gray-300
-                    prose-headings:text-purple-300 prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
-                    prose-h2:text-lg prose-h3:text-base
-                    prose-strong:text-white prose-strong:font-semibold
-                    prose-ul:my-2 prose-li:my-0.5
-                    prose-code:bg-gray-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-purple-300
-                    prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-700">
-                    <ReactMarkdown>
-                      {statusQuery.data.recentOutput}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 text-gray-500">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Waiting for agent output...
-                  </div>
-                )}
-              </div>
-
-              {/* Message input */}
-              <div className="border-t border-gray-700 p-4">
-                <form onSubmit={handleSendMessage} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Type a message to the planning agent..."
-                    className="flex-1 bg-gray-700 text-white px-4 py-2 rounded-lg border border-gray-600 focus:border-purple-500 focus:outline-none"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!message.trim() || sendMessageMutation.isPending}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
-                </form>
-
-                <div className="flex items-center justify-between mt-3">
-                  <div className="flex items-center gap-2 text-sm text-gray-500">
-                    <MessageCircle className="w-4 h-4" />
-                    Chat with the planning agent
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleAbortPlanning}
-                      disabled={abortPlanningMutation.isPending}
-                      className="flex items-center gap-1 px-3 py-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 text-sm rounded transition-colors disabled:opacity-50"
-                      title="Stop planning and return to Todo"
-                    >
-                      <X className="w-4 h-4" />
-                      Abort
-                    </button>
-                    <button
-                      onClick={handleStopPlanning}
-                      disabled={stopPlanningMutation.isPending}
-                      className="flex items-center gap-1 px-3 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm rounded transition-colors disabled:opacity-50"
-                      title="Stop agent but keep In Planning state"
-                    >
-                      <Square className="w-4 h-4" />
-                      Stop
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Viewing step - session ended but has output */}
-          {step === 'viewing' && (
-            <>
-              {/* Header */}
-              <div className="px-4 py-2 bg-blue-900/30 border-b border-blue-700/50 flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-blue-400" />
-                <span className="text-sm text-blue-300">Planning session completed</span>
-              </div>
-
-              {/* Output */}
-              <div
-                ref={outputRef}
-                className="flex-1 overflow-y-auto p-4 font-mono text-sm bg-gray-900"
-              >
-                {statusQuery.data?.recentOutput ? (
-                  <div className="prose prose-invert prose-sm max-w-none text-gray-300
-                    prose-headings:text-purple-300 prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-2
-                    prose-h2:text-lg prose-h3:text-base
-                    prose-strong:text-white prose-strong:font-semibold
-                    prose-ul:my-2 prose-li:my-0.5
-                    prose-code:bg-gray-800 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-purple-300
-                    prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-700">
-                    <ReactMarkdown>
-                      {statusQuery.data.recentOutput}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="text-gray-500">No output available</div>
-                )}
-              </div>
-
-              {/* Response input */}
-              <div className="border-t border-gray-700 p-4">
-                <form onSubmit={(e) => {
-                  e.preventDefault();
-                  if (message.trim()) {
-                    continuePlanningMutation.mutate(message.trim());
-                  }
-                }} className="space-y-3">
-                  <textarea
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        if (message.trim() && !continuePlanningMutation.isPending) {
-                          continuePlanningMutation.mutate(message.trim());
+              {/* Web terminal via xterm.js + websocket */}
+              <div className="flex-1 bg-black relative overflow-hidden" style={{ minHeight: '400px' }}>
+                {/* Use result.planningAgent.sessionName as primary source to avoid remounts during status refetch */}
+                {result?.planningAgent.sessionName ? (
+                  <XTerminal
+                    sessionName={result.planningAgent.sessionName}
+                    onDisconnect={() => {
+                      // Session ended - only go back to ready if session is actually inactive
+                      statusQuery.refetch().then(({ data }) => {
+                        if (!data?.active) {
+                          setStep('complete');
                         }
-                      }
+                      });
                     }}
-                    placeholder="Type your response to continue the planning conversation... (Enter to send, Shift+Enter for newline)"
-                    rows={3}
-                    className="w-full bg-gray-700 text-white px-4 py-2 rounded-lg border border-gray-600 focus:border-purple-500 focus:outline-none resize-none"
                   />
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="submit"
-                        disabled={!message.trim() || continuePlanningMutation.isPending}
-                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-                      >
-                        {continuePlanningMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Send className="w-4 h-4" />
-                        )}
-                        Continue Planning
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => completePlanningMutation.mutate()}
-                        disabled={completePlanningMutation.isPending}
-                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-                        title="Mark planning complete - ready for execution"
-                      >
-                        {completePlanningMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="w-4 h-4" />
-                        )}
-                        Done
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => syncPlanningMutation.mutate()}
-                        disabled={syncPlanningMutation.isPending}
-                        className="flex items-center gap-1 px-3 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 text-sm rounded transition-colors disabled:opacity-50"
-                        title="Pull planning from remote"
-                      >
-                        {syncPlanningMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Download className="w-4 h-4" />
-                        )}
-                        Pull
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => pushPlanningMutation.mutate()}
-                        disabled={pushPlanningMutation.isPending}
-                        className="flex items-center gap-1 px-3 py-1 bg-green-600/20 hover:bg-green-600/30 text-green-400 text-sm rounded transition-colors disabled:opacity-50"
-                        title="Push planning to remote"
-                      >
-                        {pushPlanningMutation.isPending ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Upload className="w-4 h-4" />
-                        )}
-                        Push
-                      </button>
+                ) : statusQuery.data?.sessionName ? (
+                  <XTerminal
+                    sessionName={statusQuery.data.sessionName}
+                    onDisconnect={() => {
+                      statusQuery.refetch().then(({ data }) => {
+                        if (!data?.active) {
+                          setStep('complete');
+                        }
+                      });
+                    }}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="flex items-center gap-2 text-gray-500">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Connecting to terminal...
                     </div>
                   </div>
-                </form>
+                )}
+              </div>
+
+              {/* Footer with controls */}
+              <div className="border-t border-gray-700 px-4 py-2 flex items-center justify-between bg-gray-800">
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  <Terminal className="w-4 h-4" />
+                  Interactive planning session
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleAbortPlanning}
+                    disabled={abortPlanningMutation.isPending}
+                    className="flex items-center gap-1 px-3 py-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 text-sm rounded transition-colors disabled:opacity-50"
+                    title="Stop planning and return to Todo"
+                  >
+                    <X className="w-4 h-4" />
+                    Abort
+                  </button>
+                  <button
+                    onClick={() => {
+                      stopPlanningMutation.mutate();
+                      statusQuery.refetch();
+                    }}
+                    disabled={stopPlanningMutation.isPending}
+                    className="flex items-center gap-1 px-3 py-1 bg-green-600/20 hover:bg-green-600/30 text-green-400 text-sm rounded transition-colors disabled:opacity-50"
+                    title="Done - mark planning complete"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Done
+                  </button>
+                </div>
               </div>
             </>
           )}

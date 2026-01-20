@@ -10,9 +10,12 @@
   },
   "dependencies": {
     "@linear/sdk": "^29.0.0",
+    "@types/ws": "^8.18.1",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "socket.io": "^4.7.0"
+    "node-pty": "^1.1.0",
+    "socket.io": "^4.7.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

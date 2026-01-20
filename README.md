@@ -62,10 +62,20 @@ pan up
 ```bash
 pan install --minimal
 pan up
-# → Dashboard: http://localhost:3001
+# → Dashboard: http://localhost:3010
 ```
 
 See [docs/DNS_SETUP.md](docs/DNS_SETUP.md) for detailed DNS configuration (especially for WSL2).
+
+## Supported Platforms
+
+| Platform | Support |
+|----------|---------|
+| **Linux** | Full support |
+| **macOS** | Full support |
+| **Windows** | WSL2 required |
+
+> **Windows users:** Panopticon requires WSL2 (Windows Subsystem for Linux 2). Native Windows is not supported. [Install WSL2](https://docs.microsoft.com/en-us/windows/wsl/install)
 
 ## Requirements
 
@@ -74,6 +84,7 @@ See [docs/DNS_SETUP.md](docs/DNS_SETUP.md) for detailed DNS configuration (espec
 - Git (for worktree-based workspaces)
 - Docker (for Traefik and workspace containers)
 - tmux (for agent sessions)
+- **ttyd** - Web terminal for interactive planning sessions. Auto-installed by `pan install`.
 - **GitHub CLI (`gh`)** - For GitHub integration (issues, PRs, merges). [Install](https://cli.github.com/)
 - **GitLab CLI (`glab`)** - For GitLab integration (if using GitLab). [Install](https://gitlab.com/gitlab-org/cli)
 
@@ -484,8 +495,8 @@ npm link
 cd src/dashboard
 npm run install:all
 npm run dev
-# → Frontend: http://localhost:3001
-# → API: http://localhost:3002
+# → Frontend: http://localhost:3010
+# → API: http://localhost:3011
 ```
 
 ### Switching Between Dev and Prod
