@@ -192,6 +192,165 @@ function getGitHubLocalPaths(): Record<string, string> {
   );
 }
 
+// ============================================================================
+// AskUserQuestion Interception Helpers (PAN-20)
+// ============================================================================
+
+/**
+ * Get workspace path from agent state file
+ * Agent state is stored in ~/.panopticon/agents/<agent-id>/state.json
+ */
+function getAgentWorkspace(agentId: string): string | null {
+  const stateFile = join(homedir(), '.panopticon', 'agents', agentId, 'state.json');
+  if (!existsSync(stateFile)) return null;
+  try {
+    const state = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    return state.workspace || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Transform workspace path to Claude project directory
+ * /home/user/projects/panopticon/workspaces/feature-pan-1
+ * -> ~/.claude/projects/-home-user-projects-panopticon-workspaces-feature-pan-1/
+ */
+function getClaudeProjectDir(workspacePath: string): string {
+  // Remove leading slash and replace all slashes with dashes
+  const dirName = workspacePath.replace(/^\//, '').replace(/\//g, '-');
+  return join(homedir(), '.claude', 'projects', `-${dirName}`);
+}
+
+/**
+ * Sessions index entry structure from Claude Code
+ */
+interface SessionIndexEntry {
+  sessionId: string;
+  fullPath: string;
+  modified: string;
+}
+
+/**
+ * Get the active (most recently modified) session JSONL path for a Claude project
+ */
+function getActiveSessionPath(projectDir: string): string | null {
+  const indexPath = join(projectDir, 'sessions-index.json');
+  if (!existsSync(indexPath)) return null;
+
+  try {
+    const index = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    const entries: SessionIndexEntry[] = index.entries || [];
+    if (entries.length === 0) return null;
+
+    // Sort by modified time descending, get most recent
+    const sorted = entries.sort((a, b) =>
+      new Date(b.modified).getTime() - new Date(a.modified).getTime()
+    );
+    return sorted[0].fullPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the JSONL session path for an agent by traversing:
+ * agent ID -> state.json -> workspace -> Claude project dir -> sessions-index.json -> JSONL
+ */
+function getAgentJsonlPath(agentId: string): string | null {
+  const workspace = getAgentWorkspace(agentId);
+  if (!workspace) return null;
+
+  const projectDir = getClaudeProjectDir(workspace);
+  return getActiveSessionPath(projectDir);
+}
+
+/**
+ * AskUserQuestion option structure
+ */
+interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+/**
+ * Single question within an AskUserQuestion tool call
+ */
+interface Question {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multiSelect: boolean;
+}
+
+/**
+ * A pending (unanswered) AskUserQuestion from JSONL
+ */
+interface PendingQuestion {
+  toolId: string;
+  timestamp: string;
+  questions: Question[];
+}
+
+/**
+ * Scan a JSONL file for pending (unanswered) AskUserQuestion tool calls
+ * A question is pending if there's a tool_use with name='AskUserQuestion'
+ * but no corresponding tool_result with matching tool_use_id
+ */
+function getPendingQuestions(jsonlPath: string): PendingQuestion[] {
+  if (!existsSync(jsonlPath)) return [];
+
+  try {
+    const content = readFileSync(jsonlPath, 'utf-8');
+    const lines = content.split('\n').filter(line => line.trim());
+
+    // Track tool calls and which ones have been answered
+    const toolCalls = new Map<string, PendingQuestion>();
+    const answeredIds = new Set<string>();
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const messageContent = entry.message?.content;
+        if (!Array.isArray(messageContent)) continue;
+
+        for (const item of messageContent) {
+          // Track AskUserQuestion tool calls
+          if (item.type === 'tool_use' && item.name === 'AskUserQuestion') {
+            toolCalls.set(item.id, {
+              toolId: item.id,
+              timestamp: entry.timestamp || new Date().toISOString(),
+              questions: item.input?.questions || []
+            });
+          }
+          // Track answered questions (tool_result)
+          if (item.type === 'tool_result' && item.tool_use_id) {
+            answeredIds.add(item.tool_use_id);
+          }
+        }
+      } catch {
+        // Skip malformed JSON lines
+      }
+    }
+
+    // Return only unanswered questions
+    return Array.from(toolCalls.entries())
+      .filter(([id]) => !answeredIds.has(id))
+      .map(([, question]) => question);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get pending questions for an agent by ID
+ */
+function getAgentPendingQuestions(agentId: string): PendingQuestion[] {
+  const jsonlPath = getAgentJsonlPath(agentId);
+  if (!jsonlPath) return [];
+  return getPendingQuestions(jsonlPath);
+}
+
 // Map GitHub issue state + labels to canonical state
 function mapGitHubStateToCanonical(state: string, labels: string[]): string {
   // Handle both API lowercase and gh CLI uppercase
@@ -1128,6 +1287,54 @@ app.delete('/api/agents/:id', (req, res) => {
   } catch (error) {
     console.error('Error killing agent:', error);
     res.status(500).json({ error: 'Failed to kill agent' });
+  }
+});
+
+// ============================================================================
+// AskUserQuestion Interception Endpoints (PAN-20)
+// ============================================================================
+
+// Get pending questions for an agent (polls JSONL for unanswered AskUserQuestion calls)
+app.get('/api/agents/:id/pending-questions', (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const questions = getAgentPendingQuestions(id);
+    res.json({
+      pending: questions.length > 0,
+      questions
+    });
+  } catch (error) {
+    console.error('Error checking pending questions:', error);
+    res.json({ pending: false, questions: [] });
+  }
+});
+
+// Submit answer to a pending question (sends keystrokes to tmux session)
+app.post('/api/agents/:id/answer-question', (req, res) => {
+  const { id } = req.params;
+  const { answers } = req.body; // Array of selected option labels
+
+  if (!answers || !Array.isArray(answers) || answers.length === 0) {
+    return res.status(400).json({ error: 'answers array required' });
+  }
+
+  try {
+    // Format answer text - join multiple selections with comma
+    const answerText = answers.join(', ');
+
+    // Send to tmux session (escape quotes in the answer)
+    const escapedAnswer = answerText.replace(/"/g, '\\"');
+    execSync(`tmux send-keys -t "${id}" "${escapedAnswer}"`, {
+      encoding: 'utf-8',
+    });
+    // Press Enter to submit
+    execSync(`tmux send-keys -t "${id}" Enter`, { encoding: 'utf-8' });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error sending answer:', error);
+    res.status(500).json({ error: 'Failed to send answer' });
   }
 });
 
