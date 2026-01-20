@@ -227,34 +227,40 @@ pan-health (no deps)
 
 ## Current Status
 
-### Phase 1: Core Onboarding (P0) - ✅ COMPLETE
+### All Skills Created - Verification Needed
 
-All 9 Phase 1 skills have been created:
+**Discovery (2025-01-20):** All skills for Phases 1-5 exist in the repo. The STATE.md was outdated - Phase 2-5 skills were created but not documented.
 
-| Skill | Location | Status |
-|-------|----------|--------|
-| `pan-help` | `~/.panopticon/skills/pan-help/` | ✅ Created & synced |
-| `pan-install` | `~/.panopticon/skills/pan-install/` | ✅ Created & synced |
-| `pan-setup` | `~/.panopticon/skills/pan-setup/` | ✅ Created & synced |
-| `pan-quickstart` | `~/.panopticon/skills/pan-quickstart/` | ✅ Created & synced |
-| `pan-up` | `~/.panopticon/skills/pan-up/` | ✅ Created & synced |
-| `pan-down` | `~/.panopticon/skills/pan-down/` | ✅ Created & synced |
-| `pan-status` | `~/.panopticon/skills/pan-status/` | ✅ Created & synced |
-| `pan-plan` | `~/.panopticon/skills/pan-plan/` | ✅ Created & synced |
-| `pan-issue` | `~/.panopticon/skills/pan-issue/` | ✅ Created & synced |
+### Skills Audit
 
-Skills are:
-- ✅ Working in `~/.panopticon/skills/` (usable now via `pan sync`)
-- ✅ Committed to repo in `skills/` directory (commit `073b520`)
+| Phase | Skills | Repo | Synced | Verified |
+|-------|--------|------|--------|----------|
+| 1 (P0) | pan-help, install, setup, quickstart, up, down, status, plan, issue | ✅ | ✅ | 🔲 |
+| 2 (P1) | pan-config, tracker, projects, sync | ✅ | ❌ | 🔲 |
+| 3 (P1) | Docker templates (6) + pan-docker, pan-network | ✅ | ❌ | 🔲 |
+| 4 (P1) | pan-approve, tell, kill, health, diagnose | ✅ | ❌ | 🔲 |
+| 5 (P2) | pan-logs, pan-rescue | ✅ | ❌ | 🔲 |
+| Bonus | pan-code-review, pan-convoy-synthesis | ✅ | ❌ | 🔲 |
+
+### Sync Gap
+
+**Issue:** Phase 2-5 skills exist in `skills/` (repo) but not in `~/.panopticon/skills/` (runtime).
+
+**Root cause:** `pan init` hasn't been run since Phase 2-5 skills were added.
+
+**Fix:** Run `pan init` or manually copy skills, then `pan sync`.
 
 ### Remaining Work
 
-| Phase | Skills | Status |
-|-------|--------|--------|
-| Phase 2 | pan-config, pan-tracker, pan-projects, pan-sync | 🔲 Not started |
-| Phase 3 | Docker templates (6) + pan-docker, pan-network | 🔲 Not started |
-| Phase 4 | pan-approve, pan-tell, pan-kill, pan-health, pan-diagnose | 🔲 Not started |
-| Phase 5 | pan-logs, pan-rescue | 🔲 Not started |
+| Task | Status |
+|------|--------|
+| Sync skills to `~/.panopticon/skills/` | 🔲 Pending |
+| Sync skills to `~/.claude/skills/` | 🔲 Pending |
+| Verify Phase 1 skills work | 🔲 Pending |
+| Verify Phase 2 skills work | 🔲 Pending |
+| Verify Phase 3 skills (Docker templates) | 🔲 Pending |
+| Verify Phase 4 skills work | 🔲 Pending |
+| Verify Phase 5 skills work | 🔲 Pending |
 
 ## Completed During Planning
 
@@ -316,36 +322,24 @@ description: Overview of all Panopticon commands and capabilities
 
 ## Beads Tasks Summary
 
-| Phase | Task ID | Description |
-|-------|---------|-------------|
-| 1 | panopticon-jh0 | pan-help skill (entry point) |
-| 1 | panopticon-24l | pan-install skill |
-| 1 | panopticon-ekw | pan-setup skill |
-| 1 | panopticon-n3d | pan-quickstart skill |
-| 1 | panopticon-le2 | pan-up skill |
-| 1 | panopticon-3py | pan-down skill |
-| 1 | panopticon-n05 | pan-status skill |
-| 1 | panopticon-yn9 | pan-plan skill |
-| 1 | panopticon-3c8 | pan-issue skill |
-| 2 | panopticon-83g | pan-config skill |
-| 2 | panopticon-d57 | pan-tracker skill |
-| 2 | panopticon-5l2 | pan-projects skill |
-| 2 | panopticon-5h2 | pan-sync skill |
-| 3 | panopticon-drg | Docker template: spring-boot |
-| 3 | panopticon-hqi | Docker template: react-vite |
-| 3 | panopticon-6pu | Docker template: nextjs |
-| 3 | panopticon-det | Docker template: dotnet |
-| 3 | panopticon-5zp | Docker template: python-fastapi |
-| 3 | panopticon-2f6 | Docker template: monorepo |
-| 3 | panopticon-20h | pan-docker skill |
-| 3 | panopticon-aze | pan-network skill |
-| 4 | panopticon-wch | pan-approve skill |
-| 4 | panopticon-0gu | pan-tell skill |
-| 4 | panopticon-6tw | pan-kill skill |
-| 4 | panopticon-d0e | pan-health skill |
-| 4 | panopticon-82r | pan-diagnose skill |
-| 5 | panopticon-0mg | pan-logs skill |
-| 5 | panopticon-6kx | pan-rescue skill |
+### Verification Tasks (Created 2025-01-20)
+
+| Priority | Task ID | Description |
+|----------|---------|-------------|
+| P0 | panopticon-qe0 | Sync skills to ~/.panopticon/skills/ |
+| P0 | panopticon-19b | Sync skills to ~/.claude/skills/ |
+| P1 | panopticon-uow | Verify Phase 1 skills (P0): pan-help, install, setup, quickstart, up, down, status, plan, issue |
+| P1 | panopticon-e5w | Verify Phase 2 skills (P1): pan-config, tracker, projects, sync |
+| P1 | panopticon-cjm | Verify Phase 3: Docker templates + pan-docker, pan-network |
+| P1 | panopticon-6kf | Verify Phase 4 skills (P1): pan-approve, tell, kill, health, diagnose |
+| P2 | panopticon-v60 | Verify Phase 5 skills (P2): pan-logs, pan-rescue |
+| P2 | panopticon-fof | Verify bonus skills: pan-code-review, pan-convoy-synthesis |
+
+### Execution Order
+
+1. **P0 (blocking):** panopticon-qe0 → panopticon-19b (sync must happen first)
+2. **P1 (can parallelize):** panopticon-uow, panopticon-e5w, panopticon-cjm, panopticon-6kf
+3. **P2 (after P1):** panopticon-v60, panopticon-fof
 
 ## References
 
