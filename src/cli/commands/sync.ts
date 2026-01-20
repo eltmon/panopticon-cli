@@ -35,7 +35,7 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
 
       console.log(chalk.cyan(`${runtime}:`));
 
-      if (plan.skills.length === 0 && plan.commands.length === 0) {
+      if (plan.skills.length === 0 && plan.commands.length === 0 && plan.agents.length === 0) {
         console.log(chalk.dim('  (nothing to sync)'));
         continue;
       }
@@ -52,6 +52,12 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
         console.log(`  ${icon} command/${item.name} ${status}`);
       }
 
+      for (const item of plan.agents) {
+        const icon = item.status === 'conflict' ? chalk.yellow('!') : chalk.green('+');
+        const status = item.status === 'conflict' ? chalk.yellow('[conflict]') : '';
+        console.log(`  ${icon} agent/${item.name} ${status}`);
+      }
+
       console.log('');
     }
 
@@ -66,6 +72,7 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
     const backupDirs = validTargets.flatMap((r) => [
       SYNC_TARGETS[r].skills,
       SYNC_TARGETS[r].commands,
+      SYNC_TARGETS[r].agents,
     ]);
 
     const backup = createBackup(backupDirs);

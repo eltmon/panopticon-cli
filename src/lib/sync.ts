@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, lstatSync, readlinkSync, rmSync } from 'fs';
 import { join, basename } from 'path';
-import { SKILLS_DIR, COMMANDS_DIR, SYNC_TARGETS, type Runtime } from './paths.js';
+import { SKILLS_DIR, COMMANDS_DIR, AGENTS_DIR, SYNC_TARGETS, type Runtime } from './paths.js';
 
 export interface SyncItem {
   name: string;
@@ -13,6 +13,7 @@ export interface SyncPlan {
   runtime: Runtime;
   skills: SyncItem[];
   commands: SyncItem[];
+  agents: SyncItem[];
 }
 
 /**
@@ -56,6 +57,7 @@ export function planSync(runtime: Runtime): SyncPlan {
     runtime,
     skills: [],
     commands: [],
+    agents: [],
   };
 
   // Plan skills sync
@@ -104,6 +106,29 @@ export function planSync(runtime: Runtime): SyncPlan {
     }
   }
 
+  // Plan agents sync
+  if (existsSync(AGENTS_DIR)) {
+    const agents = readdirSync(AGENTS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'));
+
+    for (const agent of agents) {
+      const sourcePath = join(AGENTS_DIR, agent.name);
+      const targetPath = join(targets.agents, agent.name);
+
+      let status: SyncItem['status'] = 'new';
+
+      if (existsSync(targetPath)) {
+        if (isPanopticonSymlink(targetPath)) {
+          status = 'symlink';  // Already managed by us
+        } else {
+          status = 'conflict';  // User content exists
+        }
+      }
+
+      plan.agents.push({ name: agent.name, sourcePath, targetPath, status });
+    }
+  }
+
   return plan;
 }
 
@@ -134,6 +159,7 @@ export function executeSync(runtime: Runtime, options: SyncOptions = {}): SyncRe
   // Ensure target directories exist
   mkdirSync(targets.skills, { recursive: true });
   mkdirSync(targets.commands, { recursive: true });
+  mkdirSync(targets.agents, { recursive: true });
 
   // Process skills
   for (const item of plan.skills) {
@@ -163,6 +189,30 @@ export function executeSync(runtime: Runtime, options: SyncOptions = {}): SyncRe
 
   // Process commands
   for (const item of plan.commands) {
+    if (options.dryRun) {
+      if (item.status === 'new' || item.status === 'symlink') {
+        result.created.push(item.name);
+      } else {
+        result.conflicts.push(item.name);
+      }
+      continue;
+    }
+
+    if (item.status === 'conflict' && !options.force) {
+      result.conflicts.push(item.name);
+      continue;
+    }
+
+    if (existsSync(item.targetPath)) {
+      removeTarget(item.targetPath);
+    }
+
+    symlinkSync(item.sourcePath, item.targetPath);
+    result.created.push(item.name);
+  }
+
+  // Process agents
+  for (const item of plan.agents) {
     if (options.dryRun) {
       if (item.status === 'new' || item.status === 'symlink') {
         result.created.push(item.name);

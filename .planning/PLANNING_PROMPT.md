@@ -1,4 +1,4 @@
-# Planning Session: PAN-18
+# Planning Session: PAN-6
 
 ## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
 
@@ -22,50 +22,114 @@ When planning is complete, STOP and tell the user: "Planning complete - click Do
 ---
 
 ## Issue Details
-- **ID:** PAN-18
-- **Title:** pan sync: TypeError - Cannot read properties of undefined (reading 'length')
-- **URL:** https://github.com/eltmon/panopticon-cli/issues/18
+- **ID:** PAN-6
+- **Title:** Add subagent templates for common orchestration patterns
+- **URL:** https://github.com/eltmon/panopticon-cli/issues/6
 
 ## Description
-## Bug Description
+## Background
 
-Running `pan sync` fails with a TypeError.
+Panopticon plans to ship with 10+ Skills (reusable workflow prompts), but should ALSO ship **Subagents** for patterns that benefit from isolation, parallel execution, or tool restrictions.
 
-## Steps to Reproduce
+### Skills vs Subagents
 
-1. Run `pan install` (completes successfully)
-2. Run `pan sync`
+| Concept | Isolation | Use Case |
+|---------|-----------|----------|
+| **Skills** | None - runs in main conversation | Reusable workflow guidance |
+| **Subagents** | Separate context window | Parallel work, tool restrictions, cost optimization |
 
-## Error Output
+Claude Code subagents are Markdown files with YAML frontmatter that define isolated AI agents with their own context, tool restrictions, and model selection.
+
+## Proposed Subagents
+
+Based on PRD patterns (Convoy, Planning, Triage, Health Monitoring):
+
+### 1. Convoy Review Agents (Parallel Code Review)
+
+From PRD: `pan convoy start code-review --issue MIN-648` spawns parallel reviewers.
+
+| Subagent | Model | Tools | Purpose |
+|----------|-------|-------|---------|
+| `code-review-correctness` | haiku | Read, Grep, Glob | Logic errors, edge cases, null handling |
+| `code-review-security` | sonnet | Read, Grep, Glob | OWASP Top 10, vulnerabilities |
+| `code-review-performance` | haiku | Read, Grep, Glob | Algorithms, N+1 queries, memory |
+| `code-review-synthesis` | sonnet | Read, Write | Combine findings, write final report |
+
+### 2. Planning Agent
+
+For `work plan <id>` - creates execution plans before spawning workers.
+
+```yaml
+name: planning-agent
+model: sonnet
+tools: Read, Grep, Glob, WebFetch
+permissionMode: plan
+description: Research codebase and create detailed execution plans for issues
+```
+
+### 3. Codebase Explorer
+
+Fast read-only exploration for understanding new codebases.
+
+```yaml
+name: codebase-explorer
+model: haiku
+tools: Read, Grep, Glob, Bash
+description: Fast read-only codebase exploration. Use for architecture discovery and understanding.
+```
+
+### 4. Triage Agent
+
+For `work triage` - helps categorize and prioritize issues from secondary trackers.
+
+```yaml
+name: triage-agent
+model: haiku
+tools: Read, Grep, Glob
+description: Triage issues from secondary trackers, categorize by type and estimate complexity
+```
+
+### 5. Health Monitor (Deacon)
+
+From PRD section on "Stuck Detection" - checks agent health.
+
+```yaml
+name: health-monitor
+model: haiku
+tools: Bash, Read
+description: Check agent health, detect stuck sessions, analyze logs, suggest interventions
+```
+
+## File Structure
 
 ```
-file:///Users/edward.becker/.nvm/versions/node/v20.19.5/lib/node_modules/panopticon-cli/dist/cli/index.js:210
-  if (targets.length === 0) {
-              ^
-
-TypeError: Cannot read properties of undefined (reading 'length')
-    at Command.syncCommand (file:///Users/edward.becker/.nvm/versions/node/v20.19.5/lib/node_modules/panopticon-cli/dist/cli/index.js:210:15)
-    at Command.listener [as _actionHandler] (/Users/edward.becker/.nvm/versions/node/v20.19.5/lib/node_modules/panopticon-cli/node_modules/commander/lib/command.js:542:17)
-    ...
+~/.panopticon/agents/           # Canonical source
+├── code-review-correctness.md
+├── code-review-security.md
+├── code-review-performance.md
+├── code-review-synthesis.md
+├── planning-agent.md
+├── codebase-explorer.md
+├── triage-agent.md
+└── health-monitor.md
 ```
 
-## Environment
+These would be symlinked to `~/.claude/agents/` via `pan sync`.
 
-- Platform: macOS (darwin)
-- Node.js: v20.19.5
-- panopticon-cli installed globally via npm
+## Acceptance Criteria
 
-## Analysis
+- [ ] Create 8 subagent template files
+- [ ] Each subagent has appropriate tool restrictions (read-only where applicable)
+- [ ] Each subagent uses cost-appropriate model (haiku for simple tasks)
+- [ ] Update `pan sync` to symlink agents to `~/.claude/agents/`
+- [ ] Document subagent usage in README
+- [ ] Test convoy pattern with parallel review agents
 
-The `targets` variable at line 210 is undefined. The code attempts to check `targets.length` without first verifying that `targets` is defined.
+## References
 
-## Suggested Fix
-
-Add a null check before accessing `targets.length`:
-
-```javascript
-if (\!targets || targets.length === 0) {
-```
+- PRD Section: "Parallel Agent Execution (Convoys via Skills)"
+- PRD Section: "Part 7: Stuck Detection and Health Monitoring"
+- Claude Code Subagent Docs: https://docs.anthropic.com/en/docs/claude-code/sub-agents
 
 ---
 

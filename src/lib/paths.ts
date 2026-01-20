@@ -34,18 +34,22 @@ export const SYNC_TARGETS = {
   claude: {
     skills: join(CLAUDE_DIR, 'skills'),
     commands: join(CLAUDE_DIR, 'commands'),
+    agents: join(CLAUDE_DIR, 'agents'),
   },
   codex: {
     skills: join(CODEX_DIR, 'skills'),
     commands: join(CODEX_DIR, 'commands'),
+    agents: join(CODEX_DIR, 'agents'),
   },
   cursor: {
     skills: join(CURSOR_DIR, 'skills'),
     commands: join(CURSOR_DIR, 'commands'),
+    agents: join(CURSOR_DIR, 'agents'),
   },
   gemini: {
     skills: join(GEMINI_DIR, 'skills'),
     commands: join(GEMINI_DIR, 'commands'),
+    agents: join(GEMINI_DIR, 'agents'),
   },
 } as const;
 
