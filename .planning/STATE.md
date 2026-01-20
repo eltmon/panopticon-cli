@@ -199,28 +199,44 @@ All four tasks have been implemented:
    - Click-to-focus for better UX
    - Added tabIndex for keyboard accessibility
 
-## Claude Code AskUserQuestion Bug (EXTERNAL ISSUE)
+## Claude Code AskUserQuestion Bug (EXTERNAL ISSUE - CONFIRMED)
 
-**Issue Discovered:** Claude Code's `AskUserQuestion` TUI prompt does NOT render question options when running inside a nested PTY (PTY → tmux → Claude Code).
+**Issue Discovered:** Claude Code's `AskUserQuestion` tool does NOT render question options when using the `--dangerously-skip-permissions` flag.
 
 **Symptoms:**
 - The heading text appears ("A few more questions to nail down the details:")
 - But the actual multi-select question options are invisible
-- Arrow keys, Enter, Space do nothing visible
-- Claude Code is waiting for input (process state: Ssl+)
+- The tool immediately returns empty results without waiting for user input
+- Claude Code continues as if questions were answered (with empty/null answers)
 
-**Root Cause:** The TUI library used by Claude Code (likely @clack/prompts) doesn't properly render in environments where:
-- TERM=screen (set by tmux)
-- Running in a PTY attached to another PTY
+**Root Cause:** This is a **documented bug in Claude Code** related to the `--dangerously-skip-permissions` flag:
 
-**This is NOT a Panopticon bug.** The same issue occurs when manually attaching to tmux and running Claude Code.
+| GitHub Issue | Description | Status |
+|--------------|-------------|--------|
+| [#10400](https://github.com/anthropics/claude-code/issues/10400) | AskUserQuestion returns empty response when bypass permissions enabled | Fixed in 2.0.67 |
+| [#10229](https://github.com/anthropics/claude-code/issues/10229) | AskUserQuestion tool returns empty results without displaying prompts | Closed |
+| [#10267](https://github.com/anthropics/claude-code/issues/10267) | AskUserQuestion autoselecting without waiting for user input | Not planned |
+| [#9854](https://github.com/anthropics/claude-code/issues/9854) | AskUserQuestion always returns empty answer without showing anything | Not planned |
 
-**Workaround for users:**
-1. Use `tmux attach -t <session>` directly instead of XTerminal
-2. Cancel the AskUserQuestion and ask Claude to collect input differently
-3. Skip questions by pressing Escape (if supported)
+**Why it happens:**
+- The `--dangerously-skip-permissions` flag is intended to bypass permission-based operations
+- But `AskUserQuestion` is a data-gathering tool, not a permission check
+- The flag incorrectly treats user prompts as "permissions" and auto-accepts with empty values
 
-**Recommended action:** File bug report with Anthropic/Claude Code team.
+**Tested configurations (all have the same issue):**
+- TERM=screen (tmux default)
+- TERM=xterm-256color (changed tmux default-terminal)
+- Direct tmux attach vs XTerminal PTY attachment
+- Claude Code version 2.1.12 (current)
+
+**This is NOT a Panopticon/XTerminal bug.** The XTerminal correctly forwards all PTY data. The issue is that Claude Code never writes the question options to the terminal in the first place.
+
+**Workarounds:**
+1. **Don't use `--dangerously-skip-permissions`** - This is the only reliable fix, but requires manual permission approvals
+2. **Add to CLAUDE.md**: `"AskUserQuestion tool: If response is empty/only punctuation → re-ask in plain text immediately, NO tools until I respond"`
+3. **Use tmux attach directly** - Won't help (same bug), but confirms it's not XTerminal-specific
+
+**Recommendation:** File a new bug report with Anthropic noting that the issue persists in version 2.1.12 despite the claimed fix in 2.0.67, specifically when running in tmux sessions.
 
 **Next Steps:**
 - Manual testing of terminal performance
