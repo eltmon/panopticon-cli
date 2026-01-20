@@ -104,7 +104,7 @@ export function XTerminal({ sessionName, onDisconnect }: XTerminalProps) {
       }
     };
 
-    ws.onclose = (event) => {
+    ws.onclose = (_event) => {
       term.writeln('\r\n\x1b[33m● Session disconnected\x1b[0m');
       onDisconnectRef.current?.();
     };

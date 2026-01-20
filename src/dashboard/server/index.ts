@@ -3020,6 +3020,10 @@ Start by exploring the codebase to understand the context, then begin the discov
 app.get('/api/planning/:issueId/status', (req, res) => {
   const { issueId } = req.params;
   const sessionName = `planning-${issueId.toLowerCase()}`;
+  const issueLower = issueId.toLowerCase();
+  const issuePrefix = issueId.split('-')[0];
+  const projectPath = getProjectPath(undefined, issuePrefix);
+  const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
 
   try {
     // Check if tmux session exists
@@ -3032,11 +3036,13 @@ app.get('/api/planning/:issueId/status', (req, res) => {
     res.json({
       active: sessionExists,
       sessionName,
+      workspacePath: existsSync(workspacePath) ? workspacePath : undefined,
     });
   } catch (error: any) {
     res.json({
       active: false,
       sessionName,
+      workspacePath: existsSync(workspacePath) ? workspacePath : undefined,
       error: error.message,
     });
   }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { X, Loader2, CheckCircle2, AlertCircle, Sparkles, Play, Terminal, Square } from 'lucide-react';
+import { X, Loader2, CheckCircle2, AlertCircle, Sparkles, Play, Terminal, Square, Minus, FileText, ExternalLink } from 'lucide-react';
+import { Rnd } from 'react-rnd';
 import { Issue } from '../types';
 import { XTerminal } from './XTerminal';
 
@@ -34,15 +35,19 @@ interface StartPlanningResult {
 interface PlanningStatus {
   active: boolean;
   sessionName: string;
+  workspacePath?: string;
   error?: string;
 }
 
-type Step = 'ready' | 'starting' | 'planning' | 'complete' | 'error';
+type Step = 'checking' | 'ready' | 'starting' | 'planning' | 'complete' | 'error';
 
 export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogProps) {
-  const [step, setStep] = useState<Step>('ready');
+  const [step, setStep] = useState<Step>('checking');
   const [result, setResult] = useState<StartPlanningResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState(false);
+  const [position, setPosition] = useState({ x: -1, y: -1 }); // -1 means centered
+  const [size, setSize] = useState({ width: 900, height: 600 });
 
   // Start planning mutation
   const startPlanningMutation = useMutation({
@@ -122,53 +127,34 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
     },
   });
 
-  // Complete planning - mark as ready for execution
-  const completePlanningMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/issues/${issue.identifier}/complete-planning`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Failed to complete planning');
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      onComplete(); // Refresh the issue list
-      onClose();
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-    },
-  });
-
   // Reset state when dialog closes
   useEffect(() => {
     if (!isOpen) {
-      setStep('ready');
+      setStep('checking'); // Start with checking on reopen
       setResult(null);
       setError(null);
+      setMinimized(false);
     }
   }, [isOpen]);
 
   // Check if planning session already exists when dialog opens
   useEffect(() => {
-    if (isOpen && step === 'ready') {
+    if (isOpen && step === 'checking') {
       // Check planning status
       fetch(`/api/planning/${issue.identifier}/status`)
         .then(res => res.json())
         .then((data: PlanningStatus) => {
           if (data.active) {
-            // Session is running - connect to it
+            // Session is running - connect to it directly (skip ready step)
             setStep('planning');
+          } else {
+            // No active session - show ready step
+            setStep('ready');
           }
-          // Otherwise stay on 'ready' step
         })
         .catch(() => {
-          // On error, stay on ready
+          // On error, go to ready
+          setStep('ready');
         });
     }
   }, [isOpen, issue.identifier, step]);
@@ -211,299 +197,389 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
 
   if (!isOpen) return null;
 
+  // Calculate centered position on first render
+  const centeredX = position.x === -1 ? (window.innerWidth - size.width) / 2 : position.x;
+  const centeredY = position.y === -1 ? (window.innerHeight - size.height) / 2 : position.y;
+
+  // Get PRD path based on workspace path
+  const getPrdPath = () => {
+    const workspacePath = result?.workspace?.path || statusQuery.data?.workspacePath;
+    if (!workspacePath) return null;
+    return `${workspacePath}/docs/${issue.identifier}-plan.md`;
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+    <div className="fixed inset-0 z-50">
+      {/* Backdrop - only show when not minimized */}
+      {!minimized && (
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      )}
 
-      {/* Dialog */}
-      <div className="relative bg-gray-800 rounded-xl shadow-2xl w-full max-w-3xl mx-4 min-h-[70vh] max-h-[85vh] overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-white">Plan: {issue.identifier}</h2>
-              <p className="text-sm text-gray-400 line-clamp-1">{issue.title}</p>
-            </div>
+      {/* Minimized state - small floating bar */}
+      {minimized ? (
+        <div
+          className="fixed bottom-4 right-4 bg-gray-800 rounded-lg shadow-2xl border border-gray-700 px-4 py-2 flex items-center gap-3 cursor-pointer hover:bg-gray-700 transition-colors"
+          onClick={() => setMinimized(false)}
+        >
+          <div className="w-6 h-6 rounded bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center">
+            <Sparkles className="w-3 h-3 text-white" />
           </div>
-          <div className="flex items-center gap-2">
-            {step === 'planning' && (
-              <>
-                <span className="flex items-center gap-1.5 px-2 py-1 bg-purple-500/20 text-purple-400 text-xs rounded-full">
-                  <span className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
-                  Planning Active
-                </span>
-                <button
-                  onClick={handleStopPlanning}
-                  disabled={stopPlanningMutation.isPending}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-                  title="Stop the planning agent"
-                >
-                  <Square className="w-4 h-4" />
-                  Stop
-                </button>
-              </>
-            )}
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <span className="text-sm text-white font-medium">Plan: {issue.identifier}</span>
+          {step === 'planning' && (
+            <span className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+          )}
         </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {/* Ready step - start planning */}
-          {step === 'ready' && (
-            <div className="flex-1 flex flex-col items-center justify-center p-8">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-purple-500/30 flex items-center justify-center mb-6">
-                <Terminal className="w-10 h-10 text-purple-400" />
+      ) : (
+        /* Dialog with Rnd for drag/resize */
+        <Rnd
+          position={{ x: centeredX, y: centeredY }}
+          size={size}
+          onDragStop={(_e, d) => setPosition({ x: d.x, y: d.y })}
+          onResizeStop={(_e, _direction, ref, _delta, pos) => {
+            setSize({ width: ref.offsetWidth, height: ref.offsetHeight });
+            setPosition({ x: pos.x, y: pos.y });
+          }}
+          minWidth={600}
+          minHeight={400}
+          bounds="window"
+          dragHandleClassName="drag-handle"
+          enableResizing={{
+            top: true,
+            right: true,
+            bottom: true,
+            left: true,
+            topRight: true,
+            bottomRight: true,
+            bottomLeft: true,
+            topLeft: true,
+          }}
+        >
+          <div className="w-full h-full bg-gray-800 rounded-xl shadow-2xl border border-gray-700 overflow-hidden flex flex-col">
+            {/* Header - drag handle */}
+            <div className="drag-handle flex items-center justify-between px-6 py-4 border-b border-gray-700 cursor-move">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center">
+                  <Sparkles className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Plan: {issue.identifier}</h2>
+                  <p className="text-sm text-gray-400 line-clamp-1">{issue.title}</p>
+                </div>
               </div>
-              {/* Check if already in planning state */}
-              {['In Planning', 'Planning', 'Planned', 'Discovery'].includes(issue.status) ? (
+              <div className="flex items-center gap-2">
+                {step === 'planning' && (
+                  <>
+                    <span className="flex items-center gap-1.5 px-2 py-1 bg-purple-500/20 text-purple-400 text-xs rounded-full">
+                      <span className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+                      Planning Active
+                    </span>
+                    <button
+                      onClick={handleStopPlanning}
+                      disabled={stopPlanningMutation.isPending}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                      title="Stop the planning agent"
+                    >
+                      <Square className="w-4 h-4" />
+                      Stop
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => setMinimized(true)}
+                  className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+                  title="Minimize"
+                >
+                  <Minus className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={onClose}
+                  className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-hidden flex flex-col">
+              {/* Checking step - loading state while checking for active session */}
+              {step === 'checking' && (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <Loader2 className="w-12 h-12 text-purple-400 animate-spin mb-4" />
+                  <p className="text-gray-300">Checking session status...</p>
+                </div>
+              )}
+
+              {/* Ready step - start planning */}
+              {step === 'ready' && (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-purple-500/30 flex items-center justify-center mb-6">
+                    <Terminal className="w-10 h-10 text-purple-400" />
+                  </div>
+                  {/* Check if already in planning state */}
+                  {['In Planning', 'Planning', 'Planned', 'Discovery'].includes(issue.status) ? (
+                    <>
+                      <h3 className="text-xl font-semibold text-white mb-2">Resume Planning Session</h3>
+                      <p className="text-gray-400 text-center max-w-md mb-6">
+                        This issue is in <span className="text-purple-400 font-medium">"In Planning"</span> state.
+                        You can resume planning or abort to return to Todo.
+                      </p>
+
+                      <div className="bg-gray-700/50 rounded-lg p-4 mb-6 max-w-md w-full">
+                        <h4 className="text-sm font-medium text-gray-300 mb-2">Options:</h4>
+                        <ul className="space-y-2 text-sm text-gray-400">
+                          <li className="flex items-center gap-2">
+                            <Play className="w-4 h-4 text-purple-400" />
+                            <span><strong className="text-purple-400">Resume</strong> - Start a new planning agent session</span>
+                          </li>
+                          <li className="flex items-center gap-2">
+                            <X className="w-4 h-4 text-orange-400" />
+                            <span><strong className="text-orange-400">Abort</strong> - Return issue to Todo (keeps workspace)</span>
+                          </li>
+                        </ul>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <button
+                          onClick={handleAbortPlanning}
+                          disabled={abortPlanningMutation.isPending}
+                          className="flex items-center gap-2 px-5 py-3 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 rounded-lg transition-colors font-medium disabled:opacity-50"
+                        >
+                          <X className="w-5 h-5" />
+                          {abortPlanningMutation.isPending ? 'Aborting...' : 'Abort Planning'}
+                        </button>
+                        <button
+                          onClick={handleStartPlanning}
+                          className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors font-medium"
+                        >
+                          <Play className="w-5 h-5" />
+                          Resume Planning
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="text-xl font-semibold text-white mb-2">Start Planning Session</h3>
+                      <p className="text-gray-400 text-center max-w-md mb-6">
+                        This will move the issue to <span className="text-purple-400 font-medium">"In Planning"</span>,
+                        create a workspace, and start an AI discovery session to help define the implementation plan.
+                      </p>
+
+                      <div className="bg-gray-700/50 rounded-lg p-4 mb-6 max-w-md w-full">
+                        <h4 className="text-sm font-medium text-gray-300 mb-2">What happens:</h4>
+                        <ul className="space-y-2 text-sm text-gray-400">
+                          <li className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-green-400" />
+                            Issue moves to "In Planning" in Linear
+                          </li>
+                          <li className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-green-400" />
+                            Git worktree created for feature branch
+                          </li>
+                          <li className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-green-400" />
+                            Opus agent starts discovery conversation
+                          </li>
+                        </ul>
+                      </div>
+
+                      <button
+                        onClick={handleStartPlanning}
+                        className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors font-medium"
+                      >
+                        <Play className="w-5 h-5" />
+                        Start Planning
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Starting step */}
+              {step === 'starting' && (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <Loader2 className="w-12 h-12 text-purple-400 animate-spin mb-4" />
+                  <p className="text-gray-300">Starting planning session...</p>
+                  <p className="text-sm text-gray-500 mt-2">Moving to In Planning, creating workspace, spawning agent</p>
+                </div>
+              )}
+
+              {/* Planning step - active session with web terminal */}
+              {step === 'planning' && (
                 <>
-                  <h3 className="text-xl font-semibold text-white mb-2">Resume Planning Session</h3>
+                  {/* Web terminal via xterm.js + websocket */}
+                  <div className="flex-1 bg-black relative overflow-hidden" style={{ minHeight: '400px' }}>
+                    {/* Use result.planningAgent.sessionName as primary source to avoid remounts during status refetch */}
+                    {result?.planningAgent.sessionName ? (
+                      <XTerminal
+                        sessionName={result.planningAgent.sessionName}
+                        onDisconnect={() => {
+                          // Session ended - only go back to ready if session is actually inactive
+                          statusQuery.refetch().then(({ data }) => {
+                            if (!data?.active) {
+                              setStep('complete');
+                            }
+                          });
+                        }}
+                      />
+                    ) : statusQuery.data?.sessionName ? (
+                      <XTerminal
+                        sessionName={statusQuery.data.sessionName}
+                        onDisconnect={() => {
+                          statusQuery.refetch().then(({ data }) => {
+                            if (!data?.active) {
+                              setStep('complete');
+                            }
+                          });
+                        }}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="flex items-center gap-2 text-gray-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Connecting to terminal...
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer with controls */}
+                  <div className="border-t border-gray-700 px-4 py-2 flex items-center justify-between bg-gray-800">
+                    <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <Terminal className="w-4 h-4" />
+                      Interactive planning session
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleAbortPlanning}
+                        disabled={abortPlanningMutation.isPending}
+                        className="flex items-center gap-1 px-3 py-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 text-sm rounded transition-colors disabled:opacity-50"
+                        title="Stop planning and return to Todo"
+                      >
+                        <X className="w-4 h-4" />
+                        Abort
+                      </button>
+                      <button
+                        onClick={() => {
+                          stopPlanningMutation.mutate();
+                          statusQuery.refetch();
+                        }}
+                        disabled={stopPlanningMutation.isPending}
+                        className="flex items-center gap-1 px-3 py-1 bg-green-600/20 hover:bg-green-600/30 text-green-400 text-sm rounded transition-colors disabled:opacity-50"
+                        title="Done - mark planning complete"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Complete step */}
+              {step === 'complete' && (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mb-4">
+                    <CheckCircle2 className="w-10 h-10 text-green-400" />
+                  </div>
+                  <h3 className="text-xl font-semibold text-white mb-2">Planning Complete</h3>
                   <p className="text-gray-400 text-center max-w-md mb-6">
-                    This issue is in <span className="text-purple-400 font-medium">"In Planning"</span> state.
-                    You can resume planning or abort to return to Todo.
+                    The planning session has ended. Review the plan and start the execution agent.
                   </p>
 
-                  <div className="bg-gray-700/50 rounded-lg p-4 mb-6 max-w-md w-full">
-                    <h4 className="text-sm font-medium text-gray-300 mb-2">Options:</h4>
-                    <ul className="space-y-2 text-sm text-gray-400">
-                      <li className="flex items-center gap-2">
-                        <Play className="w-4 h-4 text-purple-400" />
-                        <span><strong className="text-purple-400">Resume</strong> - Start a new planning agent session</span>
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <X className="w-4 h-4 text-orange-400" />
-                        <span><strong className="text-orange-400">Abort</strong> - Return issue to Todo (keeps workspace)</span>
-                      </li>
-                    </ul>
-                  </div>
+                  {/* PRD Link */}
+                  {getPrdPath() && (
+                    <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 mb-6 max-w-md w-full">
+                      <div className="flex items-center gap-3">
+                        <FileText className="w-8 h-8 text-purple-400" />
+                        <div className="flex-1">
+                          <p className="text-sm text-gray-300 font-medium">Feature Plan</p>
+                          <p className="text-xs text-gray-500 font-mono truncate">{getPrdPath()}</p>
+                        </div>
+                        <a
+                          href={`vscode://file${getPrdPath()}`}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-sm rounded-lg transition-colors"
+                          title="Open in VS Code"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          Open
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {result && (
+                    <div className="bg-gray-700/50 rounded-lg p-4 mb-6 max-w-md w-full">
+                      <p className="text-sm text-gray-400 mb-2">Summary:</p>
+                      <ul className="space-y-1 text-sm">
+                        <li className="text-gray-300">
+                          <span className="text-gray-500">Issue:</span> {result.issue.identifier}
+                        </li>
+                        <li className="text-gray-300">
+                          <span className="text-gray-500">State:</span>{' '}
+                          <span className="text-purple-400">{result.issue.newState}</span>
+                        </li>
+                        {result.workspace.created && (
+                          <li className="text-gray-300">
+                            <span className="text-gray-500">Workspace:</span>{' '}
+                            <span className="text-blue-400 font-mono text-xs">{result.workspace.path}</span>
+                          </li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
 
                   <div className="flex gap-3">
                     <button
-                      onClick={handleAbortPlanning}
-                      disabled={abortPlanningMutation.isPending}
-                      className="flex items-center gap-2 px-5 py-3 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 rounded-lg transition-colors font-medium disabled:opacity-50"
+                      onClick={onClose}
+                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                     >
-                      <X className="w-5 h-5" />
-                      {abortPlanningMutation.isPending ? 'Aborting...' : 'Abort Planning'}
+                      Close
                     </button>
                     <button
-                      onClick={handleStartPlanning}
-                      className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors font-medium"
+                      onClick={handleComplete}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors"
                     >
                       <Play className="w-5 h-5" />
-                      Resume Planning
+                      Start Agent
                     </button>
                   </div>
-                </>
-              ) : (
-                <>
-                  <h3 className="text-xl font-semibold text-white mb-2">Start Planning Session</h3>
-                  <p className="text-gray-400 text-center max-w-md mb-6">
-                    This will move the issue to <span className="text-purple-400 font-medium">"In Planning"</span>,
-                    create a workspace, and start an AI discovery session to help define the implementation plan.
-                  </p>
-
-                  <div className="bg-gray-700/50 rounded-lg p-4 mb-6 max-w-md w-full">
-                    <h4 className="text-sm font-medium text-gray-300 mb-2">What happens:</h4>
-                    <ul className="space-y-2 text-sm text-gray-400">
-                      <li className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-green-400" />
-                        Issue moves to "In Planning" in Linear
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-green-400" />
-                        Git worktree created for feature branch
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-green-400" />
-                        Opus agent starts discovery conversation
-                      </li>
-                    </ul>
-                  </div>
-
-                  <button
-                    onClick={handleStartPlanning}
-                    className="flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors font-medium"
-                  >
-                    <Play className="w-5 h-5" />
-                    Start Planning
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Starting step */}
-          {step === 'starting' && (
-            <div className="flex-1 flex flex-col items-center justify-center p-8">
-              <Loader2 className="w-12 h-12 text-purple-400 animate-spin mb-4" />
-              <p className="text-gray-300">Starting planning session...</p>
-              <p className="text-sm text-gray-500 mt-2">Moving to In Planning, creating workspace, spawning agent</p>
-            </div>
-          )}
-
-          {/* Planning step - active session with web terminal */}
-          {step === 'planning' && (
-            <>
-              {/* Web terminal via xterm.js + websocket */}
-              <div className="flex-1 bg-black relative overflow-hidden" style={{ minHeight: '400px' }}>
-                {/* Use result.planningAgent.sessionName as primary source to avoid remounts during status refetch */}
-                {result?.planningAgent.sessionName ? (
-                  <XTerminal
-                    sessionName={result.planningAgent.sessionName}
-                    onDisconnect={() => {
-                      // Session ended - only go back to ready if session is actually inactive
-                      statusQuery.refetch().then(({ data }) => {
-                        if (!data?.active) {
-                          setStep('complete');
-                        }
-                      });
-                    }}
-                  />
-                ) : statusQuery.data?.sessionName ? (
-                  <XTerminal
-                    sessionName={statusQuery.data.sessionName}
-                    onDisconnect={() => {
-                      statusQuery.refetch().then(({ data }) => {
-                        if (!data?.active) {
-                          setStep('complete');
-                        }
-                      });
-                    }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="flex items-center gap-2 text-gray-500">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Connecting to terminal...
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer with controls */}
-              <div className="border-t border-gray-700 px-4 py-2 flex items-center justify-between bg-gray-800">
-                <div className="flex items-center gap-2 text-sm text-gray-400">
-                  <Terminal className="w-4 h-4" />
-                  Interactive planning session
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleAbortPlanning}
-                    disabled={abortPlanningMutation.isPending}
-                    className="flex items-center gap-1 px-3 py-1 bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 text-sm rounded transition-colors disabled:opacity-50"
-                    title="Stop planning and return to Todo"
-                  >
-                    <X className="w-4 h-4" />
-                    Abort
-                  </button>
-                  <button
-                    onClick={() => {
-                      stopPlanningMutation.mutate();
-                      statusQuery.refetch();
-                    }}
-                    disabled={stopPlanningMutation.isPending}
-                    className="flex items-center gap-1 px-3 py-1 bg-green-600/20 hover:bg-green-600/30 text-green-400 text-sm rounded transition-colors disabled:opacity-50"
-                    title="Done - mark planning complete"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    Done
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* Complete step */}
-          {step === 'complete' && (
-            <div className="flex-1 flex flex-col items-center justify-center p-8">
-              <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mb-4">
-                <CheckCircle2 className="w-10 h-10 text-green-400" />
-              </div>
-              <h3 className="text-xl font-semibold text-white mb-2">Planning Complete</h3>
-              <p className="text-gray-400 text-center max-w-md mb-6">
-                The planning session has ended. The issue is now ready for execution.
-              </p>
-
-              {result && (
-                <div className="bg-gray-700/50 rounded-lg p-4 mb-6 max-w-md w-full">
-                  <p className="text-sm text-gray-400 mb-2">Summary:</p>
-                  <ul className="space-y-1 text-sm">
-                    <li className="text-gray-300">
-                      <span className="text-gray-500">Issue:</span> {result.issue.identifier}
-                    </li>
-                    <li className="text-gray-300">
-                      <span className="text-gray-500">State:</span>{' '}
-                      <span className="text-purple-400">{result.issue.newState}</span>
-                    </li>
-                    {result.workspace.created && (
-                      <li className="text-gray-300">
-                        <span className="text-gray-500">Workspace:</span>{' '}
-                        <span className="text-blue-400 font-mono text-xs">{result.workspace.path}</span>
-                      </li>
-                    )}
-                  </ul>
                 </div>
               )}
 
-              <div className="flex gap-3">
-                <button
-                  onClick={onClose}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-                >
-                  Close
-                </button>
-                <button
-                  onClick={handleComplete}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors"
-                >
-                  <Play className="w-5 h-5" />
-                  Start Agent
-                </button>
-              </div>
-            </div>
-          )}
+              {/* Error step */}
+              {step === 'error' && (
+                <div className="flex-1 flex flex-col items-center justify-center p-8">
+                  <div className="w-16 h-16 rounded-full bg-red-500/20 flex items-center justify-center mb-4">
+                    <AlertCircle className="w-10 h-10 text-red-400" />
+                  </div>
+                  <h3 className="text-xl font-semibold text-white mb-2">Planning Failed</h3>
+                  <p className="text-red-400 text-center max-w-md mb-6">{error}</p>
 
-          {/* Error step */}
-          {step === 'error' && (
-            <div className="flex-1 flex flex-col items-center justify-center p-8">
-              <div className="w-16 h-16 rounded-full bg-red-500/20 flex items-center justify-center mb-4">
-                <AlertCircle className="w-10 h-10 text-red-400" />
-              </div>
-              <h3 className="text-xl font-semibold text-white mb-2">Planning Failed</h3>
-              <p className="text-red-400 text-center max-w-md mb-6">{error}</p>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={onClose}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-                >
-                  Close
-                </button>
-                <button
-                  onClick={() => {
-                    setStep('ready');
-                    setError(null);
-                  }}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
-                >
-                  Try Again
-                </button>
-              </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={onClose}
+                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={() => {
+                        setStep('ready');
+                        setError(null);
+                      }}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </div>
+        </Rnd>
+      )}
     </div>
   );
 }
