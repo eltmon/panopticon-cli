@@ -21,10 +21,39 @@ Skills help AI assistants:
 - Skill name in SKILL.md: Can use `pan:help` or `pan-help` (both work for invocation)
 - Matches existing skills: `bug-fix`, `feature-work`, `code-review-*`
 
-### 3. Skill Location
-**Decision:** `~/.panopticon/skills/`
+### 3. Skill Location & Distribution
+**Decision:** Repo is source of truth, runtime is a copy.
 
-Skills are distributed with Panopticon and synced to Claude Code via `pan sync`.
+**Distribution flow:**
+```
+repo/skills/pan-*/           ← SOURCE OF TRUTH (version controlled)
+       ↓ pan init / npm postinstall
+~/.panopticon/skills/pan-*/  ← Runtime copy (user's machine)
+       ↓ pan sync
+~/.claude/skills/pan-*/      ← Symlinked for AI tools
+```
+
+**Workflow for creating/updating skills (for agents working on PAN-3):**
+1. Create/edit skill in feature branch: `skills/{name}/SKILL.md`
+2. Commit to feature branch (`feature/pan-3`)
+3. Test locally by copying to `~/.panopticon/skills/` and running `pan sync`
+4. When done with phase, PR/review
+5. Merge to main
+6. On release: `npm publish` includes skills in package
+7. Users run `pan init` or update → skills copied to `~/.panopticon/skills/`
+
+**Current workspace path:** `/home/eltmon/projects/panopticon/workspaces/feature-pan-3/`
+**Skills directory:** `./skills/` (relative to workspace root)
+
+**Note:** Phase 1 skills already exist in both:
+- `~/.panopticon/skills/pan-*/` (working now via `pan sync`)
+- `./skills/pan-*/` (committed to repo)
+
+**Project-specific skills** (not Panopticon generic):
+- Live in `{project}/.claude/skills/` (git-tracked in the project)
+- These are NOT managed by Panopticon
+- `pan sync` adds Panopticon skills alongside, never replaces project skills
+- "Git-tracked always wins" - project skills take precedence
 
 ### 4. Docker Templates
 **Decision:** Create app-type templates in `templates/docker/`
@@ -196,11 +225,43 @@ pan-health (no deps)
     └──► pan-diagnose ──► pan-rescue
 ```
 
+## Current Status
+
+### Phase 1: Core Onboarding (P0) - ✅ COMPLETE
+
+All 9 Phase 1 skills have been created:
+
+| Skill | Location | Status |
+|-------|----------|--------|
+| `pan-help` | `~/.panopticon/skills/pan-help/` | ✅ Created & synced |
+| `pan-install` | `~/.panopticon/skills/pan-install/` | ✅ Created & synced |
+| `pan-setup` | `~/.panopticon/skills/pan-setup/` | ✅ Created & synced |
+| `pan-quickstart` | `~/.panopticon/skills/pan-quickstart/` | ✅ Created & synced |
+| `pan-up` | `~/.panopticon/skills/pan-up/` | ✅ Created & synced |
+| `pan-down` | `~/.panopticon/skills/pan-down/` | ✅ Created & synced |
+| `pan-status` | `~/.panopticon/skills/pan-status/` | ✅ Created & synced |
+| `pan-plan` | `~/.panopticon/skills/pan-plan/` | ✅ Created & synced |
+| `pan-issue` | `~/.panopticon/skills/pan-issue/` | ✅ Created & synced |
+
+Skills are:
+- ✅ Working in `~/.panopticon/skills/` (usable now via `pan sync`)
+- ✅ Committed to repo in `skills/` directory (commit `073b520`)
+
+### Remaining Work
+
+| Phase | Skills | Status |
+|-------|--------|--------|
+| Phase 2 | pan-config, pan-tracker, pan-projects, pan-sync | 🔲 Not started |
+| Phase 3 | Docker templates (6) + pan-docker, pan-network | 🔲 Not started |
+| Phase 4 | pan-approve, pan-tell, pan-kill, pan-health, pan-diagnose | 🔲 Not started |
+| Phase 5 | pan-logs, pan-rescue | 🔲 Not started |
+
 ## Completed During Planning
 
 | Task | Status | Reference |
 |------|--------|-----------|
 | Fix planning prompt template to include PRD instruction | ✅ Done | [GitHub #7](https://github.com/eltmon/panopticon-cli/issues/7) |
+| Create Phase 1 skills (9 skills) | ✅ Done | Commit `073b520` |
 
 **Fix details:** Updated `src/dashboard/server/index.ts` to include PRD creation instruction in both the main planning prompt and continuation prompt templates.
 

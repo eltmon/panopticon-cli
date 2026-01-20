@@ -22,23 +22,32 @@ Skills help AI assistants:
 - Matches existing skills: `bug-fix`, `feature-work`, `code-review-*`
 
 ### 3. Skill Location & Distribution
-**Decision:** Two-location system for skills.
+**Decision:** Repo is source of truth, runtime is a copy.
 
-**Runtime location:** `~/.panopticon/skills/`
-- This is where `pan sync` reads from
-- Skills here are immediately usable
-- `pan sync` creates symlinks to `~/.claude/skills/`, `~/.codex/skills/`, etc.
+**Distribution flow:**
+```
+repo/skills/pan-*/           ← SOURCE OF TRUTH (version controlled)
+       ↓ pan init / npm postinstall
+~/.panopticon/skills/pan-*/  ← Runtime copy (user's machine)
+       ↓ pan sync
+~/.claude/skills/pan-*/      ← Symlinked for AI tools
+```
 
-**Version control:** `{repo}/skills/`
-- Skills are committed to the repo for distribution
-- On install, skills get copied from repo to `~/.panopticon/skills/`
-- This ensures new users get all bundled skills
+**Workflow for creating/updating skills (for agents working on PAN-3):**
+1. Create/edit skill in feature branch: `skills/{name}/SKILL.md`
+2. Commit to feature branch (`feature/pan-3`)
+3. Test locally by copying to `~/.panopticon/skills/` and running `pan sync`
+4. When done with phase, PR/review
+5. Merge to main
+6. On release: `npm publish` includes skills in package
+7. Users run `pan init` or update → skills copied to `~/.panopticon/skills/`
 
-**Workflow for creating new skills:**
-1. Create skill in `~/.panopticon/skills/{name}/SKILL.md`
-2. Test with `pan sync` and verify it works
-3. Copy to repo: `cp -r ~/.panopticon/skills/{name} {repo}/skills/`
-4. Commit to repo for version control
+**Current workspace path:** `/home/eltmon/projects/panopticon/workspaces/feature-pan-3/`
+**Skills directory:** `./skills/` (relative to workspace root)
+
+**Note:** Phase 1 skills already exist in both:
+- `~/.panopticon/skills/pan-*/` (working now via `pan sync`)
+- `./skills/pan-*/` (committed to repo)
 
 **Project-specific skills** (not Panopticon generic):
 - Live in `{project}/.claude/skills/` (git-tracked in the project)
