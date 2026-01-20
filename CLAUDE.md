@@ -22,27 +22,39 @@ Panopticon is a multi-agent orchestration framework for AI coding assistants. It
 
 ## Skills Management
 
-**IMPORTANT:** When adding or updating skills, consider whether they belong in Panopticon distribution.
+**IMPORTANT:** The repo `skills/` directory is the source of truth for Panopticon-bundled skills.
 
-| Keep Local (`~/.claude/skills/`) | Add to Panopticon (`~/.panopticon/skills/`) |
-|----------------------------------|---------------------------------------------|
-| Project-specific (MYN, personal) | Generally useful to all users |
-| Experimental/WIP | Multi-agent workflow helpers |
-| User's private workflows | Wraps common CLI tools (beads, etc.) |
-
-**After updating a skill that should ship with Panopticon:**
-```bash
-cp -r ~/.claude/skills/my-skill ~/.panopticon/skills/my-skill
-pan sync  # Distribute to all AI tools
+**Distribution flow:**
+```
+repo/skills/           ← SOURCE OF TRUTH (commit here)
+       ↓ pan init / npm postinstall
+~/.panopticon/skills/  ← Runtime copy on user's machine
+       ↓ pan sync
+~/.claude/skills/      ← Symlinked for AI tools
 ```
 
-**Current Panopticon skills:**
+**When creating/updating skills for Panopticon:**
+1. Create/edit in `skills/{name}/SKILL.md` (in your feature branch)
+2. Commit to your feature branch
+3. Test by copying to `~/.panopticon/skills/` and running `pan sync`
+4. PR/review, merge to main
+5. Skills ship with next `npm publish`
+
+**DO NOT** create skills directly in `~/.panopticon/skills/` - that's the runtime copy, not the source.
+
+**Skill types:**
+| Type | Location | Example |
+|------|----------|---------|
+| Panopticon-bundled | `repo/skills/` | `pan-help`, `beads`, `feature-work` |
+| Project-specific | `{project}/.claude/skills/` | `myn-standards` |
+| User personal | `~/.claude/skills/` | Experimental, private |
+
+**Current Panopticon skills (in repo):**
+- `pan-*` - Panopticon operation guides (help, install, setup, up, down, etc.)
 - `beads` - Git-backed issue tracking
 - `feature-work`, `bug-fix`, `refactor` - Development workflows
 - `code-review`, `code-review-security`, `code-review-performance` - Review checklists
 - `release`, `dependency-update`, `incident-response` - Operations
-- `onboard-codebase` - Learning new codebases
-- `session-health`, `skill-creator`, `web-design-guidelines` - Utilities
 
 ## Dashboard Development
 
