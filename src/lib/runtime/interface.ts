@@ -1,0 +1,248 @@
+/**
+ * Multi-Runtime Architecture
+ *
+ * Provides a unified interface for interacting with different AI coding assistants:
+ * - Claude Code
+ * - Codex (OpenAI Codex CLI)
+ * - Cursor
+ * - Gemini CLI
+ */
+
+export type RuntimeType = 'claude' | 'codex' | 'cursor' | 'gemini';
+
+/**
+ * Configuration for a runtime
+ */
+export interface RuntimeConfig {
+  type: RuntimeType;
+  name: string;
+  version?: string;
+  configDir: string;
+  skillsDir: string;
+  commandsDir?: string;
+  executable?: string;
+  apiKeyEnv?: string;
+  features: RuntimeFeatures;
+}
+
+/**
+ * Features supported by a runtime
+ */
+export interface RuntimeFeatures {
+  skills: boolean;
+  commands: boolean;
+  mcpServers: boolean;
+  hooks: boolean;
+  multiModel: boolean;
+  backgroundAgents: boolean;
+  planMode: boolean;
+  webSearch: boolean;
+  codeExecution: boolean;
+}
+
+/**
+ * Agent spawn options
+ */
+export interface AgentSpawnOptions {
+  workingDir: string;
+  prompt: string;
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  timeout?: number;
+  env?: Record<string, string>;
+}
+
+/**
+ * Agent status
+ */
+export interface AgentStatus {
+  id: string;
+  runtime: RuntimeType;
+  status: 'running' | 'stopped' | 'error' | 'completed';
+  pid?: number;
+  startedAt: string;
+  lastActivity?: string;
+  error?: string;
+}
+
+/**
+ * Message to send to an agent
+ */
+export interface AgentMessage {
+  content: string;
+  type?: 'user' | 'system' | 'error';
+}
+
+/**
+ * Runtime adapter interface
+ */
+export interface RuntimeAdapter {
+  readonly type: RuntimeType;
+  readonly config: RuntimeConfig;
+
+  /**
+   * Check if the runtime is installed and available
+   */
+  isAvailable(): Promise<boolean>;
+
+  /**
+   * Get the version of the runtime
+   */
+  getVersion(): Promise<string | null>;
+
+  /**
+   * Initialize the runtime (create config dirs, etc.)
+   */
+  initialize(): Promise<void>;
+
+  /**
+   * Spawn an agent in this runtime
+   */
+  spawnAgent(id: string, options: AgentSpawnOptions): Promise<boolean>;
+
+  /**
+   * Send a message to a running agent
+   */
+  sendMessage(id: string, message: AgentMessage): Promise<boolean>;
+
+  /**
+   * Get the status of an agent
+   */
+  getAgentStatus(id: string): Promise<AgentStatus | null>;
+
+  /**
+   * Stop an agent
+   */
+  stopAgent(id: string): Promise<boolean>;
+
+  /**
+   * List all running agents
+   */
+  listAgents(): Promise<AgentStatus[]>;
+
+  /**
+   * Sync skills to this runtime
+   */
+  syncSkills(sourceDir: string, force?: boolean): Promise<number>;
+
+  /**
+   * Sync commands to this runtime
+   */
+  syncCommands?(sourceDir: string, force?: boolean): Promise<number>;
+
+  /**
+   * Get the skills directory for this runtime
+   */
+  getSkillsDir(): string;
+
+  /**
+   * Get the commands directory for this runtime
+   */
+  getCommandsDir?(): string;
+}
+
+/**
+ * Runtime registry for managing multiple runtimes
+ */
+export interface RuntimeRegistry {
+  /**
+   * Register a runtime adapter
+   */
+  register(adapter: RuntimeAdapter): void;
+
+  /**
+   * Get a runtime adapter by type
+   */
+  get(type: RuntimeType): RuntimeAdapter | undefined;
+
+  /**
+   * Get all registered runtimes
+   */
+  getAll(): RuntimeAdapter[];
+
+  /**
+   * Get all available (installed) runtimes
+   */
+  getAvailable(): Promise<RuntimeAdapter[]>;
+
+  /**
+   * Sync skills to all registered runtimes
+   */
+  syncToAll(sourceDir: string, force?: boolean): Promise<Map<RuntimeType, number>>;
+}
+
+/**
+ * Default feature set for runtimes
+ */
+export const DEFAULT_FEATURES: RuntimeFeatures = {
+  skills: true,
+  commands: false,
+  mcpServers: false,
+  hooks: false,
+  multiModel: false,
+  backgroundAgents: false,
+  planMode: false,
+  webSearch: false,
+  codeExecution: true,
+};
+
+/**
+ * Claude Code feature set
+ */
+export const CLAUDE_FEATURES: RuntimeFeatures = {
+  skills: true,
+  commands: true,
+  mcpServers: true,
+  hooks: true,
+  multiModel: true,
+  backgroundAgents: true,
+  planMode: true,
+  webSearch: true,
+  codeExecution: true,
+};
+
+/**
+ * Codex feature set
+ */
+export const CODEX_FEATURES: RuntimeFeatures = {
+  skills: true,
+  commands: false,
+  mcpServers: false,
+  hooks: false,
+  multiModel: false,
+  backgroundAgents: false,
+  planMode: false,
+  webSearch: false,
+  codeExecution: true,
+};
+
+/**
+ * Cursor feature set
+ */
+export const CURSOR_FEATURES: RuntimeFeatures = {
+  skills: true,
+  commands: false,
+  mcpServers: true,
+  hooks: false,
+  multiModel: true,
+  backgroundAgents: false,
+  planMode: false,
+  webSearch: false,
+  codeExecution: true,
+};
+
+/**
+ * Gemini CLI feature set
+ */
+export const GEMINI_FEATURES: RuntimeFeatures = {
+  skills: true,
+  commands: false,
+  mcpServers: false,
+  hooks: false,
+  multiModel: false,
+  backgroundAgents: false,
+  planMode: false,
+  webSearch: true,
+  codeExecution: true,
+};

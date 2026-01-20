@@ -8,10 +8,11 @@ import { SkillsList } from './components/SkillsList';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { IssueDetailPanel } from './components/IssueDetailPanel';
 import { ActivityPanel } from './components/ActivityPanel';
-import { Eye, LayoutGrid, Users, Activity, BookOpen, Terminal, Maximize2, Minimize2 } from 'lucide-react';
+import { RuntimeComparison } from './components/RuntimeComparison';
+import { Eye, LayoutGrid, Users, Activity, BookOpen, Terminal, Maximize2, Minimize2, BarChart3 } from 'lucide-react';
 import { Agent, Issue } from './types';
 
-type Tab = 'kanban' | 'agents' | 'skills' | 'health' | 'activity';
+type Tab = 'kanban' | 'agents' | 'skills' | 'health' | 'activity' | 'metrics';
 
 const MIN_PANEL_WIDTH = 400;
 const MAX_PANEL_WIDTH = 1200;
@@ -113,6 +114,7 @@ export default function App() {
               { id: 'kanban', label: 'Board', icon: LayoutGrid },
               { id: 'agents', label: 'Agents', icon: Users },
               { id: 'activity', label: 'Activity', icon: Terminal },
+              { id: 'metrics', label: 'Metrics', icon: BarChart3 },
               { id: 'skills', label: 'Skills', icon: BookOpen },
               { id: 'health', label: 'Health', icon: Activity },
             ] as const).map(({ id, label, icon: Icon }) => (
@@ -203,6 +205,11 @@ export default function App() {
         {activeTab === 'activity' && (
           <div className="w-full h-full">
             <ActivityPanel onClose={() => setActiveTab('kanban')} />
+          </div>
+        )}
+        {activeTab === 'metrics' && (
+          <div className="w-full overflow-auto">
+            <RuntimeComparison />
           </div>
         )}
       </main>

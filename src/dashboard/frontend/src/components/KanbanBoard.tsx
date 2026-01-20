@@ -1,8 +1,54 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Issue, Agent, LinearProject, STATUS_ORDER, STATUS_LABELS } from '../types';
-import { ExternalLink, User, Tag, Play, Eye, MessageCircle, X, Loader2, Filter, FileText, Github, List, CheckCircle } from 'lucide-react';
+import { ExternalLink, User, Tag, Play, Eye, MessageCircle, X, Loader2, Filter, FileText, Github, List, CheckCircle, DollarSign } from 'lucide-react';
 import { PlanDialog } from './PlanDialog';
+
+// Cost data for an issue
+interface IssueCost {
+  issueId: string;
+  totalCost: number;
+  tokenCount: number;
+  sessionCount: number;
+}
+
+// Fetch costs for all issues
+async function fetchIssueCosts(): Promise<Record<string, IssueCost>> {
+  try {
+    const res = await fetch('/api/costs/by-issue');
+    if (!res.ok) return {};
+    const data = await res.json();
+    const costMap: Record<string, IssueCost> = {};
+    for (const issue of data.issues || []) {
+      costMap[issue.issueId.toLowerCase()] = issue;
+    }
+    return costMap;
+  } catch {
+    return {};
+  }
+}
+
+// Format cost for display
+function formatCost(cost: number): string {
+  if (cost >= 100) {
+    return `$${cost.toFixed(0)}`;
+  } else if (cost >= 10) {
+    return `$${cost.toFixed(1)}`;
+  } else if (cost >= 1) {
+    return `$${cost.toFixed(2)}`;
+  } else if (cost > 0) {
+    return `$${cost.toFixed(2)}`;
+  }
+  return '';
+}
+
+// Get cost badge color based on amount
+function getCostColor(cost: number): string {
+  if (cost >= 50) return 'bg-red-900/50 text-red-400';
+  if (cost >= 20) return 'bg-orange-900/50 text-orange-400';
+  if (cost >= 5) return 'bg-yellow-900/50 text-yellow-400';
+  return 'bg-green-900/50 text-green-400';
+}
 
 async function fetchIssues(cycle: string = 'current', includeCompleted: boolean = false): Promise<Issue[]> {
   const params = new URLSearchParams();
@@ -91,6 +137,14 @@ export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssu
     queryKey: ['agents'],
     queryFn: fetchAgents,
     refetchInterval: 5000, // Refresh every 5 seconds
+  });
+
+  // Fetch costs for all issues
+  const { data: issueCosts = {} } = useQuery({
+    queryKey: ['issueCosts'],
+    queryFn: fetchIssueCosts,
+    refetchInterval: 30000, // Refresh every 30 seconds
+    staleTime: 10000,
   });
 
   // Extract unique projects from issues
@@ -277,6 +331,7 @@ export function KanbanBoard({ selectedIssue: externalSelectedIssue, onSelectIssu
                     key={issue.id}
                     issue={issue}
                     agent={agent}
+                    cost={issueCosts[issue.identifier.toLowerCase()]}
                     isSelected={selectedIssue === issue.identifier}
                     onSelect={() => onSelectIssue(
                       selectedIssue === issue.identifier ? null : issue.identifier
@@ -419,13 +474,14 @@ function BeadsDialog({ issue, onClose }: { issue: Issue; onClose: () => void }) 
 interface IssueCardProps {
   issue: Issue;
   agent?: Agent;
+  cost?: IssueCost;
   isSelected: boolean;
   onSelect: () => void;
   onPlan: () => void; // Lifted to parent to survive re-renders
   onViewBeads?: (issue: Issue) => void;
 }
 
-function IssueCard({ issue, agent, isSelected, onSelect, onPlan, onViewBeads }: IssueCardProps) {
+function IssueCard({ issue, agent, cost, isSelected, onSelect, onPlan, onViewBeads }: IssueCardProps) {
   const queryClient = useQueryClient();
   const isRunning = agent && agent.status !== 'dead';
   const [showAbortConfirm, setShowAbortConfirm] = useState(false);
@@ -612,6 +668,16 @@ function IssueCard({ issue, agent, isSelected, onSelect, onPlan, onViewBeads }: 
             </a>
             {agent && (
               <span className="text-xs text-blue-400">{agent.model}</span>
+            )}
+            {/* Cost badge */}
+            {cost && cost.totalCost > 0 && (
+              <span
+                className={`ml-auto px-1.5 py-0.5 rounded text-xs font-medium ${getCostColor(cost.totalCost)}`}
+                title={`${cost.sessionCount} session${cost.sessionCount !== 1 ? 's' : ''}, ${(cost.tokenCount / 1000000).toFixed(2)}M tokens`}
+              >
+                <DollarSign className="w-3 h-3 inline -mt-0.5" />
+                {formatCost(cost.totalCost).slice(1)}
+              </span>
             )}
           </div>
           <p className="text-sm text-gray-300 mt-1 line-clamp-2">{issue.title}</p>

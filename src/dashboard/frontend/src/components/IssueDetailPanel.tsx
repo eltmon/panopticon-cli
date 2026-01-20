@@ -23,7 +23,51 @@ import {
   Bot,
   AlertTriangle,
   RefreshCw,
+  DollarSign,
+  Cpu,
 } from 'lucide-react';
+
+// Cost data types
+interface SessionCost {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  type: string;
+  model: string;
+  cost?: number;
+  tokenCount?: number;
+}
+
+interface IssueCostData {
+  issueId: string;
+  totalCost: number;
+  totalTokens: number;
+  sessions: SessionCost[];
+  byModel: Record<string, number>;
+}
+
+// Fetch cost data for an issue
+async function fetchIssueCosts(issueId: string): Promise<IssueCostData> {
+  const res = await fetch(`/api/issues/${issueId}/costs`);
+  if (!res.ok) throw new Error('Failed to fetch costs');
+  return res.json();
+}
+
+// Format cost for display
+function formatCost(cost: number): string {
+  if (cost >= 100) return `$${cost.toFixed(0)}`;
+  if (cost >= 10) return `$${cost.toFixed(1)}`;
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  if (cost > 0) return `$${cost.toFixed(3)}`;
+  return '$0.00';
+}
+
+// Format token count
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(2)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
+  return tokens.toString();
+}
 import { Issue, GitStatus } from '../types';
 
 interface ContainerStatus {
@@ -126,6 +170,14 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
       return res.json();
     },
     refetchInterval: 5000, // Check for workspace changes
+  });
+
+  // Fetch cost data
+  const { data: costData } = useQuery<IssueCostData>({
+    queryKey: ['issueCosts', issue.identifier],
+    queryFn: () => fetchIssueCosts(issue.identifier),
+    refetchInterval: 30000,
+    staleTime: 10000,
   });
 
   const handleCopyIdentifier = () => {
@@ -366,6 +418,87 @@ export function IssueDetailPanel({ issue, onClose, onStartAgent }: IssueDetailPa
             <h3 className="text-sm font-medium text-gray-400 mb-2">Description</h3>
             <div className="text-sm text-gray-300 bg-gray-900 rounded p-3 max-h-64 overflow-y-auto prose prose-sm prose-invert prose-p:my-2 prose-headings:my-2 prose-ul:my-1 prose-li:my-0">
               <ReactMarkdown>{issue.description}</ReactMarkdown>
+            </div>
+          </div>
+        )}
+
+        {/* Cost Summary */}
+        {costData && (costData.totalCost > 0 || costData.sessions.length > 0) && (
+          <div className="mb-6">
+            <h3 className="text-sm font-medium text-gray-400 mb-2 flex items-center gap-2">
+              <DollarSign className="w-4 h-4" />
+              Cost Summary
+            </h3>
+            <div className="bg-gray-900 rounded p-3 space-y-3">
+              {/* Total cost */}
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Total Cost</span>
+                <span className="text-xl font-semibold text-green-400">
+                  {formatCost(costData.totalCost)}
+                </span>
+              </div>
+
+              {/* Token count */}
+              {costData.totalTokens > 0 && (
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-500 flex items-center gap-1">
+                    <Cpu className="w-3 h-3" />
+                    Total Tokens
+                  </span>
+                  <span className="text-gray-300">{formatTokens(costData.totalTokens)}</span>
+                </div>
+              )}
+
+              {/* By Model breakdown */}
+              {Object.keys(costData.byModel).length > 0 && (
+                <div className="border-t border-gray-700 pt-2">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">By Model</p>
+                  <div className="space-y-1">
+                    {Object.entries(costData.byModel)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([model, cost]) => (
+                        <div key={model} className="flex items-center justify-between text-sm">
+                          <span className="text-gray-400 truncate">{model}</span>
+                          <span className="text-gray-300">{formatCost(cost)}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sessions */}
+              {costData.sessions.length > 0 && (
+                <div className="border-t border-gray-700 pt-2">
+                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">
+                    Sessions ({costData.sessions.length})
+                  </p>
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
+                    {costData.sessions.map((session) => (
+                      <div
+                        key={session.id}
+                        className="flex items-center justify-between text-xs bg-gray-800 rounded px-2 py-1"
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="px-1.5 py-0.5 bg-gray-700 rounded text-gray-400">
+                            {session.type}
+                          </span>
+                          <span className="text-gray-500 truncate">{session.model}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {session.tokenCount && (
+                            <span className="text-gray-500">{formatTokens(session.tokenCount)}</span>
+                          )}
+                          {session.cost ? (
+                            <span className="text-green-400">{formatCost(session.cost)}</span>
+                          ) : (
+                            <span className="text-gray-600">-</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

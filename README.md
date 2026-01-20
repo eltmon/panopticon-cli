@@ -479,38 +479,114 @@ This runs everything in Docker containers, avoiding port conflicts with your oth
 ```bash
 pan up --minimal
 ```
-- Dashboard: http://localhost:3001
+- Dashboard: http://localhost:3010
 
 Stop with `pan down`.
 
+### Dashboard Tabs
+
+| Tab | Purpose |
+|-----|---------|
+| **Board** | Kanban view of Linear issues with drag-and-drop status changes |
+| **Agents** | Running agent sessions with terminal output |
+| **Activity** | Real-time `pan` command output log |
+| **Metrics** | Runtime comparison and cost tracking |
+| **Skills** | Available skills and their descriptions |
+| **Health** | System health checks and diagnostics |
+
+### Metrics & Cost Tracking
+
+The **Metrics** tab provides insights into AI agent performance and costs:
+
+- **Per-issue cost badges** - See costs directly on Kanban cards (color-coded by amount)
+- **Issue cost breakdown** - Click an issue to see detailed costs by model and session
+- **Runtime comparison** - Compare success rates, duration, and costs across runtimes (Claude, Codex, etc.)
+- **Capability analysis** - See how different task types (feature, bugfix, refactor) perform
+
+Cost data is stored in `~/.panopticon/`:
+- `session-map.json` - Links Claude Code sessions to issues
+- `runtime-metrics.json` - Aggregated runtime performance data
+- `costs/` - Raw cost logs
+
+**API Endpoints:**
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/costs/summary` | Overall cost summary (today/week/month) |
+| `GET /api/costs/by-issue` | Costs grouped by issue |
+| `GET /api/issues/:id/costs` | Cost details for a specific issue |
+| `GET /api/metrics/runtimes` | Runtime comparison metrics |
+| `GET /api/metrics/tasks` | Recent task history |
+
 ## Skills
 
-Panopticon ships with 10+ high-value skills:
+Panopticon ships with 25+ skills organized into categories:
+
+### Development Workflows
 
 | Skill | Description |
 |-------|-------------|
 | `feature-work` | Standard feature development workflow |
 | `bug-fix` | Systematic bug investigation and fix |
+| `refactor` | Safe refactoring with test coverage |
 | `code-review` | Comprehensive code review checklist |
 | `code-review-security` | OWASP Top 10 security analysis |
 | `code-review-performance` | Algorithm and resource optimization |
-| `refactor` | Safe refactoring with test coverage |
 | `release` | Step-by-step release process |
-| `incident-response` | Production incident handling |
 | `dependency-update` | Safe dependency updates |
+| `incident-response` | Production incident handling |
 | `onboard-codebase` | Understanding new codebases |
-| `knowledge-capture` | AI self-monitoring: captures learnings when confused or corrected |
-| `refactor-radar` | AI self-monitoring: detects systemic issues causing AI confusion |
+| `work-complete` | Checklist for completing agent work |
+
+### AI Self-Monitoring
+
+| Skill | Description |
+|-------|-------------|
+| `knowledge-capture` | Captures learnings when AI gets confused or corrected |
+| `refactor-radar` | Detects systemic issues causing AI confusion |
+| `session-health` | Detect and clean up stuck sessions |
+
+### Panopticon Operations (pan-*)
+
+| Skill | Description |
+|-------|-------------|
+| `pan-help` | Show all Panopticon commands |
+| `pan-up` | Start dashboard and services |
+| `pan-down` | Stop dashboard and services |
+| `pan-status` | Show running agents |
+| `pan-issue` | Spawn agent for an issue |
+| `pan-plan` | Create execution plan for issue |
+| `pan-tell` | Send message to running agent |
+| `pan-kill` | Kill a running agent |
+| `pan-approve` | Approve agent work and merge |
+| `pan-health` | Check system health |
+| `pan-sync` | Sync skills to AI tools |
+| `pan-install` | Install prerequisites |
+| `pan-setup` | Initial setup wizard |
+| `pan-quickstart` | Quick start guide |
+| `pan-projects` | Manage registered projects |
+| `pan-tracker` | Issue tracker operations |
+| `pan-logs` | View agent logs |
+| `pan-rescue` | Recover crashed agents |
+| `pan-diagnose` | Diagnose agent issues |
+| `pan-docker` | Docker operations |
+| `pan-network` | Network diagnostics |
+| `pan-config` | Configuration management |
+| `pan-convoy-synthesis` | Synthesize convoy coordination |
+| `pan-subagent-creator` | Create specialized subagents |
+| `pan-skill-creator` | Create new skills (guided) |
+
+### Utilities
+
+| Skill | Description |
+|-------|-------------|
+| `beads` | Git-backed issue tracking with dependencies |
+| `skill-creator` | Guide for creating new skills |
+| `web-design-guidelines` | UI/UX review checklist |
 
 ### Reserved Skill Names
 
-Panopticon reserves the following skill names. **Do not use these names for project-specific skills** to avoid conflicts:
-
-**Pan operations:**
-`pan-down`, `pan-help`, `pan-install`, `pan-issue`, `pan-plan`, `pan-quickstart`, `pan-setup`, `pan-status`, `pan-up`
-
-**Workflow skills:**
-`beads`, `bug-fix`, `code-review`, `code-review-performance`, `code-review-security`, `dependency-update`, `feature-work`, `incident-response`, `knowledge-capture`, `onboard-codebase`, `refactor`, `refactor-radar`, `release`, `session-health`, `skill-creator`, `web-design-guidelines`, `work-complete`
+Panopticon reserves all skill names listed above. **Do not use these names for project-specific skills** to avoid conflicts.
 
 **Recommendation:** Use a project-specific prefix for your skills (e.g., `myn-standards`, `acme-deployment`) to avoid namespace collisions.
 
@@ -602,17 +678,21 @@ This ensures every Panopticon-managed project has a well-defined canonical PRD t
 
 ```
 ~/.panopticon/
-  skills/             # Shared skills (SKILL.md format)
-  commands/           # Slash commands
-  agents/             # Per-agent state
+  skills/               # Shared skills (SKILL.md format)
+  commands/             # Slash commands
+  agents/               # Per-agent state
     agent-min-123/
-      state.json      # Agent state
-      health.json     # Health status
-      hook.json       # GUPP work queue
-      cv.json         # Work history
-      mail/           # Incoming messages
-  projects.json       # Managed projects
-  backups/            # Sync backups
+      state.json        # Agent state
+      health.json       # Health status
+      hook.json         # GUPP work queue
+      cv.json           # Work history
+      mail/             # Incoming messages
+  projects.json         # Managed projects
+  project-mappings.json # Linear project → local path mappings
+  session-map.json      # Claude sessions → issue linking
+  runtime-metrics.json  # Runtime performance metrics
+  costs/                # Raw cost logs (JSONL)
+  backups/              # Sync backups
 ```
 
 ## Health Monitoring (Deacon Pattern)

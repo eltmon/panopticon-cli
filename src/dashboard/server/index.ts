@@ -2014,6 +2014,7 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
 });
 
 // Approve workspace: merge, update Linear, clean up
+// SAFETY: Never delete remote branches. Always push before cleanup. Abort on any error.
 app.post('/api/workspaces/:issueId/approve', async (req, res) => {
   const { issueId } = req.params;
   const issuePrefix = issueId.split('-')[0];
@@ -2022,31 +2023,83 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
   const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
   const branchName = `feature/${issueLower}`;
 
+  // Track what we've done for rollback info
+  let mergeCompleted = false;
+  let pushCompleted = false;
+
   try {
     // 1. Check workspace exists
     if (!existsSync(workspacePath)) {
       return res.status(400).json({ error: 'Workspace does not exist' });
     }
 
-    // 2. Try to merge the feature branch
+    // 2. Verify the feature branch exists
     try {
-      // First, make sure we're on main
-      execSync('git checkout main', { cwd: projectPath, encoding: 'utf-8' });
+      execSync(`git rev-parse --verify ${branchName}`, { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+    } catch {
+      return res.status(400).json({ error: `Branch ${branchName} does not exist` });
+    }
 
-      // Try the merge
-      execSync(`git merge ${branchName} --no-edit`, { cwd: projectPath, encoding: 'utf-8' });
+    // 3. Check for uncommitted changes in workspace before proceeding
+    try {
+      const status = execSync('git status --porcelain', { cwd: workspacePath, encoding: 'utf-8' });
+      if (status.trim()) {
+        return res.status(400).json({
+          error: `Workspace has uncommitted changes. Please commit or stash them first:\ncd ${workspacePath}\ngit status`
+        });
+      }
+    } catch (statusErr) {
+      // If we can't check status, continue but log it
+      console.warn('Could not check workspace status:', statusErr);
+    }
+
+    // 4. Push the feature branch to remote BEFORE merging (preserve work)
+    try {
+      execSync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8', stdio: 'pipe' });
+      console.log(`Pushed ${branchName} to remote`);
+    } catch (pushErr: any) {
+      // If push fails, it might already be up to date - that's okay
+      console.log(`Feature branch push note: ${pushErr.message}`);
+    }
+
+    // 5. Switch to main and pull latest
+    try {
+      execSync('git checkout main', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      execSync('git pull --ff-only', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+    } catch (checkoutErr: any) {
+      return res.status(400).json({
+        error: `Failed to checkout/update main branch: ${checkoutErr.message}`
+      });
+    }
+
+    // 6. Try to merge the feature branch
+    try {
+      execSync(`git merge ${branchName} --no-edit`, { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      mergeCompleted = true;
       console.log(`Merged ${branchName} to main`);
     } catch (mergeError: any) {
       // Abort the merge if there was a conflict
       try {
-        execSync('git merge --abort', { cwd: projectPath, encoding: 'utf-8' });
+        execSync('git merge --abort', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
       } catch {}
       return res.status(400).json({
         error: `Merge conflict! Please resolve manually:\ncd ${projectPath}\ngit merge ${branchName}`
       });
     }
 
-    // 3. Stop any running agent
+    // 7. CRITICAL: Push merged main to remote BEFORE any cleanup
+    try {
+      execSync('git push origin main', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      pushCompleted = true;
+      console.log('Pushed merged main to remote');
+    } catch (pushErr: any) {
+      // CRITICAL: If push fails, DO NOT proceed with cleanup
+      return res.status(400).json({
+        error: `Merge succeeded but push failed! Your work is safe locally.\nPlease push manually: cd ${projectPath} && git push origin main\nError: ${pushErr.message}`
+      });
+    }
+
+    // 8. Stop any running agent
     const agentId = `agent-${issueLower}`;
     try {
       execSync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
@@ -2058,26 +2111,28 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
       // Agent not running, that's fine
     }
 
-    // 4. Remove the workspace (git worktree)
+    // 9. Remove the workspace (git worktree) - ONLY after successful push
     try {
       execSync(`git worktree remove workspaces/feature-${issueLower} --force`, {
         cwd: projectPath,
-        encoding: 'utf-8'
+        encoding: 'utf-8',
+        stdio: 'pipe'
       });
       console.log(`Removed workspace for ${issueId}`);
     } catch (wtError: any) {
-      console.error('Error removing worktree:', wtError.message);
+      // Log but don't fail - workspace cleanup is non-critical after push
+      console.error('Error removing worktree (non-fatal):', wtError.message);
     }
 
-    // 5. Delete the feature branch
+    // 10. Delete LOCAL feature branch only - NEVER delete remote branch
+    // The remote branch serves as a backup/audit trail
     try {
-      execSync(`git branch -d ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
-      console.log(`Deleted branch ${branchName}`);
+      execSync(`git branch -d ${branchName}`, { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      console.log(`Deleted local branch ${branchName} (remote preserved)`);
     } catch (branchError: any) {
-      // Try force delete if normal delete fails
-      try {
-        execSync(`git branch -D ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
-      } catch {}
+      // If -d fails, the branch might not be fully merged - don't force delete
+      console.log(`Could not delete local branch ${branchName} (may have unmerged commits): ${branchError.message}`);
+      // DO NOT use -D (force delete) - if -d fails, something is wrong
     }
 
     // 6. Update Linear issue to Done (or GitHub label)
@@ -2345,6 +2400,58 @@ app.post('/api/agents', async (req, res) => {
     // Extract prefix from issue ID (e.g., "MIN" from "MIN-645")
     const issuePrefix = issueId.split('-')[0];
     const projectPath = getProjectPath(projectId, issuePrefix);
+    const issueLower = issueId.toLowerCase();
+
+    // Before starting agent, commit and push any planning artifacts
+    const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
+    const workspacePlanningDir = join(workspacePath, '.planning');
+    const legacyPlanningDir = join(projectPath, '.planning', issueLower);
+
+    let planningDir: string | null = null;
+    if (existsSync(workspacePlanningDir)) {
+      planningDir = workspacePlanningDir;
+    } else if (existsSync(legacyPlanningDir)) {
+      planningDir = legacyPlanningDir;
+    }
+
+    if (planningDir) {
+      try {
+        // Get the git root (workspace or project root)
+        const gitRoot = planningDir.includes('/workspaces/')
+          ? workspacePath
+          : projectPath;
+
+        // Git add planning and beads directories
+        execSync(`git add .planning/`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+        // Also add .beads/ if it exists
+        if (existsSync(join(gitRoot, '.beads'))) {
+          execSync(`git add .beads/`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+        }
+        // Also add STATE.md and WORKSPACE.md if they exist
+        if (existsSync(join(gitRoot, 'STATE.md'))) {
+          execSync(`git add STATE.md`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+        }
+        if (existsSync(join(gitRoot, 'WORKSPACE.md'))) {
+          execSync(`git add WORKSPACE.md`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+        }
+
+        // Check if there are changes to commit
+        try {
+          execSync(`git diff --cached --quiet`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          // No changes to commit
+          console.log(`No planning changes to commit for ${issueId}`);
+        } catch (diffErr) {
+          // There are changes, commit and push them
+          execSync(`git commit -m "Planning artifacts for ${issueId} before agent start"`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          execSync(`git push`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          console.log(`Committed and pushed planning artifacts for ${issueId}`);
+        }
+      } catch (gitErr) {
+        console.error('Git commit/push of planning artifacts failed:', gitErr);
+        // Continue even if git fails - don't block agent start
+      }
+    }
+
     const activityId = spawnPanCommand(
       ['work', 'issue', issueId],
       `Start agent for ${issueId}`,
@@ -2457,8 +2564,6 @@ app.post('/api/agents', async (req, res) => {
 
     // Also start containers if workspace has ./dev script
     let containerActivityId: string | null = null;
-    const issueLower = issueId.toLowerCase();
-    const workspacePath = join(projectPath, 'workspaces', `feature-${issueLower}`);
     const devScript = join(workspacePath, 'dev');
 
     if (existsSync(workspacePath) && existsSync(devScript)) {
@@ -3730,6 +3835,227 @@ app.get('/api/issues/:id/beads', (req, res) => {
   } catch (error: any) {
     console.error('Error fetching beads:', error);
     res.status(500).json({ error: 'Failed to fetch beads: ' + error.message });
+  }
+});
+
+// ============== Cost & Metrics API ==============
+
+// Cost tracking imports (inline to avoid external module issues)
+const COSTS_DIR = join(homedir(), '.panopticon', 'costs');
+const SESSION_MAP_FILE = join(homedir(), '.panopticon', 'session-map.json');
+const METRICS_FILE = join(homedir(), '.panopticon', 'runtime-metrics.json');
+
+// Model pricing data
+const MODEL_PRICING: Record<string, { inputPer1k: number; outputPer1k: number; cacheReadPer1k?: number; cacheWritePer1k?: number }> = {
+  'claude-opus-4': { inputPer1k: 0.015, outputPer1k: 0.075, cacheReadPer1k: 0.00175, cacheWritePer1k: 0.01875 },
+  'claude-sonnet-4': { inputPer1k: 0.003, outputPer1k: 0.015, cacheReadPer1k: 0.0003, cacheWritePer1k: 0.00375 },
+  'claude-haiku-3.5': { inputPer1k: 0.0008, outputPer1k: 0.004, cacheReadPer1k: 0.00008, cacheWritePer1k: 0.001 },
+};
+
+function readCostFiles(startDate: string, endDate: string): any[] {
+  const entries: any[] = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  for (let date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+    const dateStr = date.toISOString().split('T')[0];
+    const costFile = join(COSTS_DIR, `costs-${dateStr}.jsonl`);
+
+    if (existsSync(costFile)) {
+      const content = readFileSync(costFile, 'utf-8');
+      const lines = content.split('\n').filter(line => line.trim());
+
+      for (const line of lines) {
+        try {
+          entries.push(JSON.parse(line));
+        } catch {
+          // Skip invalid entries
+        }
+      }
+    }
+  }
+
+  return entries;
+}
+
+function loadSessionMap(): any {
+  try {
+    if (existsSync(SESSION_MAP_FILE)) {
+      return JSON.parse(readFileSync(SESSION_MAP_FILE, 'utf-8'));
+    }
+  } catch {}
+  return { version: 1, issues: {}, lastUpdated: new Date().toISOString() };
+}
+
+function loadRuntimeMetrics(): any {
+  try {
+    if (existsSync(METRICS_FILE)) {
+      return JSON.parse(readFileSync(METRICS_FILE, 'utf-8'));
+    }
+  } catch {}
+  return { version: 1, tasks: [], runtimes: {}, lastUpdated: new Date().toISOString() };
+}
+
+// GET /api/costs/summary - Overall cost summary
+app.get('/api/costs/summary', (_req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const todayEntries = readCostFiles(today, today);
+    const weekEntries = readCostFiles(weekAgo, today);
+    const monthEntries = readCostFiles(monthAgo, today);
+
+    const summarize = (entries: any[]) => ({
+      totalCost: entries.reduce((sum, e) => sum + (e.cost || 0), 0),
+      totalTokens: entries.reduce((sum, e) => sum + ((e.usage?.inputTokens || 0) + (e.usage?.outputTokens || 0)), 0),
+      entryCount: entries.length,
+      byModel: entries.reduce((acc, e) => {
+        acc[e.model] = (acc[e.model] || 0) + (e.cost || 0);
+        return acc;
+      }, {} as Record<string, number>),
+    });
+
+    res.json({
+      today: summarize(todayEntries),
+      week: summarize(weekEntries),
+      month: summarize(monthEntries),
+    });
+  } catch (error: any) {
+    console.error('Error getting cost summary:', error);
+    res.status(500).json({ error: 'Failed to get cost summary: ' + error.message });
+  }
+});
+
+// GET /api/costs/by-issue - Costs grouped by issue
+app.get('/api/costs/by-issue', (_req, res) => {
+  try {
+    const sessionMap = loadSessionMap();
+    const issues: Array<{ issueId: string; totalCost: number; tokenCount: number; sessionCount: number }> = [];
+
+    for (const [issueId, issueData] of Object.entries(sessionMap.issues || {})) {
+      const data = issueData as any;
+      issues.push({
+        issueId,
+        totalCost: data.totalCost || 0,
+        tokenCount: data.totalTokens || 0,
+        sessionCount: data.sessions?.length || 0,
+      });
+    }
+
+    // Sort by cost descending
+    issues.sort((a, b) => b.totalCost - a.totalCost);
+
+    res.json({ issues });
+  } catch (error: any) {
+    console.error('Error getting costs by issue:', error);
+    res.status(500).json({ error: 'Failed to get costs by issue: ' + error.message });
+  }
+});
+
+// GET /api/issues/:id/costs - Cost summary for a specific issue
+app.get('/api/issues/:id/costs', (req, res) => {
+  try {
+    const { id } = req.params;
+    const sessionMap = loadSessionMap();
+    const issueData = sessionMap.issues?.[id] || sessionMap.issues?.[id.toUpperCase()];
+
+    if (!issueData) {
+      // Try to find by searching (case-insensitive)
+      const issueKey = Object.keys(sessionMap.issues || {}).find(
+        k => k.toLowerCase() === id.toLowerCase()
+      );
+      if (!issueKey) {
+        return res.json({
+          issueId: id,
+          totalCost: 0,
+          totalTokens: 0,
+          sessions: [],
+          byModel: {},
+        });
+      }
+    }
+
+    const data = issueData || { sessions: [], totalCost: 0, totalTokens: 0 };
+
+    // Calculate by-model breakdown
+    const byModel: Record<string, number> = {};
+    for (const session of data.sessions || []) {
+      const model = session.model || 'unknown';
+      byModel[model] = (byModel[model] || 0) + (session.cost || 0);
+    }
+
+    res.json({
+      issueId: id,
+      totalCost: data.totalCost || 0,
+      totalTokens: data.totalTokens || 0,
+      sessions: data.sessions || [],
+      byModel,
+    });
+  } catch (error: any) {
+    console.error('Error getting issue costs:', error);
+    res.status(500).json({ error: 'Failed to get issue costs: ' + error.message });
+  }
+});
+
+// GET /api/metrics/runtimes - Runtime metrics comparison
+app.get('/api/metrics/runtimes', (_req, res) => {
+  try {
+    const metrics = loadRuntimeMetrics();
+    const runtimes = metrics.runtimes || {};
+
+    // Format for frontend
+    const comparison = Object.entries(runtimes).map(([runtime, data]: [string, any]) => ({
+      runtime,
+      totalTasks: data.totalTasks || 0,
+      successfulTasks: data.successfulTasks || 0,
+      failedTasks: data.failedTasks || 0,
+      successRate: data.successRate || 0,
+      avgDurationMinutes: data.avgDurationMinutes || 0,
+      avgCost: data.avgCost || 0,
+      totalCost: data.totalCost || 0,
+      totalTokens: data.totalTokens || 0,
+      byCapability: data.byCapability || {},
+      byModel: data.byModel || {},
+      dailyStats: data.dailyStats || [],
+    }));
+
+    // Calculate aggregates
+    const totalTasks = comparison.reduce((sum, r) => sum + r.totalTasks, 0);
+    const totalCost = comparison.reduce((sum, r) => sum + r.totalCost, 0);
+    const totalTokens = comparison.reduce((sum, r) => sum + r.totalTokens, 0);
+    const totalSuccessful = comparison.reduce((sum, r) => sum + r.successfulTasks, 0);
+
+    res.json({
+      runtimes: comparison,
+      aggregated: {
+        totalTasks,
+        totalCost,
+        totalTokens,
+        avgSuccessRate: totalTasks > 0 ? totalSuccessful / totalTasks : 0,
+      },
+      lastUpdated: metrics.lastUpdated,
+    });
+  } catch (error: any) {
+    console.error('Error getting runtime metrics:', error);
+    res.status(500).json({ error: 'Failed to get runtime metrics: ' + error.message });
+  }
+});
+
+// GET /api/metrics/tasks - Recent tasks
+app.get('/api/metrics/tasks', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const metrics = loadRuntimeMetrics();
+    const tasks = (metrics.tasks || [])
+      .sort((a: any, b: any) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
+      .slice(0, limit);
+
+    res.json({ tasks });
+  } catch (error: any) {
+    console.error('Error getting tasks:', error);
+    res.status(500).json({ error: 'Failed to get tasks: ' + error.message });
   }
 });
 
