@@ -2905,6 +2905,7 @@ app.post('/api/issues/:id/start-planning', async (req, res) => {
 - Generate planning artifacts:
   - STATE.md (decisions, approach, architecture)
   - Beads tasks (via \`bd create\`)
+  - PRD file at \`docs/prds/active/{issue-id}-plan.md\` (copy of STATE.md, required for dashboard)
 - Present options and tradeoffs for the user to decide
 
 When planning is complete, STOP and tell the user: "Planning complete - click Done when ready to hand off to an agent for implementation."
@@ -3188,7 +3189,7 @@ app.post('/api/planning/:issueId/message', async (req, res) => {
 **YOU SHOULD ONLY:**
 - Ask clarifying questions
 - Explore the codebase to understand context
-- Generate planning artifacts (STATE.md, Beads tasks via \`bd create\`)
+- Generate planning artifacts (STATE.md, Beads tasks via \`bd create\`, PRD at \`docs/prds/active/{issue-id}-plan.md\`)
 - Present options and tradeoffs
 
 ---
@@ -3811,18 +3812,21 @@ wss.on('connection', (ws: WebSocket, req) => {
     const message = data.toString();
 
     // Handle resize messages (JSON format: {"type":"resize","cols":80,"rows":24})
-    try {
-      const parsed = JSON.parse(message);
-      if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-        // Resize both PTY and tmux window
-        ptyProcess.resize(parsed.cols, parsed.rows);
-        try {
-          execSync(`tmux resize-window -t ${sessionName} -x ${parsed.cols} -y ${parsed.rows} 2>/dev/null || true`, { encoding: 'utf-8' });
-        } catch { /* ignore */ }
-        return;
+    // Only attempt JSON parse if message looks like JSON (starts with '{')
+    if (message.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(message);
+        if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+          // Resize both PTY and tmux window
+          ptyProcess.resize(parsed.cols, parsed.rows);
+          try {
+            execSync(`tmux resize-window -t ${sessionName} -x ${parsed.cols} -y ${parsed.rows} 2>/dev/null || true`, { encoding: 'utf-8' });
+          } catch { /* ignore */ }
+          return;
+        }
+      } catch {
+        // Invalid JSON, treat as terminal input
       }
-    } catch {
-      // Not JSON, treat as terminal input
     }
 
     ptyProcess.write(message);
