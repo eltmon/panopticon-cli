@@ -13,19 +13,24 @@ interface SyncOptions {
 
 export async function syncCommand(options: SyncOptions): Promise<void> {
   const config = loadConfig();
-  const targets = config.sync.targets as Runtime[];
+  const targets = config.sync?.targets;
 
-  if (targets.length === 0) {
+  // Defensive check: ensure targets is defined and is a valid array
+  if (!targets || !Array.isArray(targets) || targets.length === 0) {
     console.log(chalk.yellow('No sync targets configured.'));
-    console.log(chalk.dim('Edit ~/.panopticon/config.toml to add targets.'));
+    console.log(chalk.dim('Edit ~/.panopticon/config.toml to add targets to the [sync] section.'));
+    console.log(chalk.dim('Example: targets = ["claude-code", "cursor"]'));
     return;
   }
+
+  // Type assertion is now safe since we've validated the array
+  const validTargets = targets as Runtime[];
 
   // Dry run mode
   if (options.dryRun) {
     console.log(chalk.bold('Sync Plan (dry run):\n'));
 
-    for (const runtime of targets) {
+    for (const runtime of validTargets) {
       const plan = planSync(runtime);
 
       console.log(chalk.cyan(`${runtime}:`));
@@ -58,7 +63,7 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
   if (config.sync.backup_before_sync) {
     const spinner = ora('Creating backup...').start();
 
-    const backupDirs = targets.flatMap((r) => [
+    const backupDirs = validTargets.flatMap((r) => [
       SYNC_TARGETS[r].skills,
       SYNC_TARGETS[r].commands,
     ]);
@@ -82,7 +87,7 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
   let totalCreated = 0;
   let totalConflicts = 0;
 
-  for (const runtime of targets) {
+  for (const runtime of validTargets) {
     spinner.text = `Syncing to ${runtime}...`;
 
     const result = executeSync(runtime, { force: options.force });
@@ -104,6 +109,6 @@ export async function syncCommand(options: SyncOptions): Promise<void> {
     console.log('');
     console.log(chalk.dim('Use --force to overwrite conflicting items.'));
   } else {
-    spinner.succeed(`Synced ${totalCreated} items to ${targets.join(', ')}`);
+    spinner.succeed(`Synced ${totalCreated} items to ${validTargets.join(', ')}`);
   }
 }

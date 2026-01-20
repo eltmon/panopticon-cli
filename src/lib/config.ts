@@ -78,6 +78,41 @@ const DEFAULT_CONFIG: PanopticonConfig = {
   },
 };
 
+/**
+ * Deep merge utility that recursively merges objects.
+ * - Recursively merges nested objects
+ * - Arrays in overrides replace defaults (not concatenated)
+ * - User values take precedence over defaults
+ */
+function deepMerge<T extends object>(defaults: T, overrides: Partial<T>): T {
+  const result = { ...defaults };
+
+  for (const key of Object.keys(overrides) as (keyof T)[]) {
+    const defaultVal = defaults[key];
+    const overrideVal = overrides[key];
+
+    // Skip undefined values in overrides
+    if (overrideVal === undefined) continue;
+
+    // Deep merge if both values are non-array objects
+    if (
+      typeof defaultVal === 'object' &&
+      defaultVal !== null &&
+      !Array.isArray(defaultVal) &&
+      typeof overrideVal === 'object' &&
+      overrideVal !== null &&
+      !Array.isArray(overrideVal)
+    ) {
+      result[key] = deepMerge(defaultVal, overrideVal as any);
+    } else {
+      // For primitives, arrays, or null - override wins
+      result[key] = overrideVal as T[keyof T];
+    }
+  }
+
+  return result;
+}
+
 export function loadConfig(): PanopticonConfig {
   if (!existsSync(CONFIG_FILE)) {
     return DEFAULT_CONFIG;
@@ -85,8 +120,8 @@ export function loadConfig(): PanopticonConfig {
 
   try {
     const content = readFileSync(CONFIG_FILE, 'utf8');
-    const parsed = parse(content) as unknown as PanopticonConfig;
-    return { ...DEFAULT_CONFIG, ...parsed };
+    const parsed = parse(content) as unknown as Partial<PanopticonConfig>;
+    return deepMerge(DEFAULT_CONFIG, parsed);
   } catch (error) {
     console.error('Warning: Failed to parse config, using defaults');
     return DEFAULT_CONFIG;
