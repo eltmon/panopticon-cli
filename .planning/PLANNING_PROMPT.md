@@ -1,4 +1,4 @@
-# Planning Session: PAN-6
+# Planning Session: PAN-17
 
 ## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
 
@@ -22,114 +22,61 @@ When planning is complete, STOP and tell the user: "Planning complete - click Do
 ---
 
 ## Issue Details
-- **ID:** PAN-6
-- **Title:** Add subagent templates for common orchestration patterns
-- **URL:** https://github.com/eltmon/panopticon-cli/issues/6
+- **ID:** PAN-17
+- **Title:** XTerminal performance issues with interactive prompts and connection handling
+- **URL:** https://github.com/eltmon/panopticon-cli/issues/17
 
 ## Description
-## Background
+## Problem
 
-Panopticon plans to ship with 10+ Skills (reusable workflow prompts), but should ALSO ship **Subagents** for patterns that benefit from isolation, parallel execution, or tool restrictions.
+The web-based terminal component (XTerminal) in the dashboard has several performance and usability issues:
 
-### Skills vs Subagents
+### 1. Arrow keys don't work properly in Claude Code interactive prompts
 
-| Concept | Isolation | Use Case |
-|---------|-----------|----------|
-| **Skills** | None - runs in main conversation | Reusable workflow guidance |
-| **Subagents** | Separate context window | Parallel work, tool restrictions, cost optimization |
+When Claude Code displays an `AskUserQuestion` multi-select prompt:
+- Arrow keys don't move the selection cursor (`>`)
+- Instead, they behave like document editing navigation
+- Users cannot select options without using tmux directly
 
-Claude Code subagents are Markdown files with YAML frontmatter that define isolated AI agents with their own context, tool restrictions, and model selection.
+**Workaround:** `tmux attach -t <session>` to interact directly
 
-## Proposed Subagents
+### 2. Port exhaustion on heavy usage
 
-Based on PRD patterns (Convoy, Planning, Triage, Health Monitoring):
-
-### 1. Convoy Review Agents (Parallel Code Review)
-
-From PRD: `pan convoy start code-review --issue MIN-648` spawns parallel reviewers.
-
-| Subagent | Model | Tools | Purpose |
-|----------|-------|-------|---------|
-| `code-review-correctness` | haiku | Read, Grep, Glob | Logic errors, edge cases, null handling |
-| `code-review-security` | sonnet | Read, Grep, Glob | OWASP Top 10, vulnerabilities |
-| `code-review-performance` | haiku | Read, Grep, Glob | Algorithms, N+1 queries, memory |
-| `code-review-synthesis` | sonnet | Read, Write | Combine findings, write final report |
-
-### 2. Planning Agent
-
-For `work plan <id>` - creates execution plans before spawning workers.
-
-```yaml
-name: planning-agent
-model: sonnet
-tools: Read, Grep, Glob, WebFetch
-permissionMode: plan
-description: Research codebase and create detailed execution plans for issues
+After extended use, the Vite proxy starts failing with:
+```
+Error: connect EADDRNOTAVAIL 127.0.0.1:3011 - Local (0.0.0.0:0)
 ```
 
-### 3. Codebase Explorer
+This indicates ephemeral port exhaustion from websocket connections not being properly cleaned up.
 
-Fast read-only exploration for understanding new codebases.
+### 3. Connection handling
 
-```yaml
-name: codebase-explorer
-model: haiku
-tools: Read, Grep, Glob, Bash
-description: Fast read-only codebase exploration. Use for architecture discovery and understanding.
-```
+- Connections pile up over time (observed 100+ established connections to port 3011)
+- No apparent connection pooling or cleanup
+- Requires full dashboard restart to recover
 
-### 4. Triage Agent
+## Technical Context
 
-For `work triage` - helps categorize and prioritize issues from secondary trackers.
+- XTerminal uses xterm.js + websocket to connect to tmux sessions
+- The websocket server is in `src/dashboard/server/index.ts`
+- Terminal component: `src/dashboard/frontend/src/components/XTerminal.tsx`
 
-```yaml
-name: triage-agent
-model: haiku
-tools: Read, Grep, Glob
-description: Triage issues from secondary trackers, categorize by type and estimate complexity
-```
+## Suggested Improvements
 
-### 5. Health Monitor (Deacon)
+1. **Escape sequence passthrough**: Ensure arrow key escape sequences are properly passed through to the underlying tmux/Claude Code process
+2. **Connection cleanup**: Implement proper websocket connection cleanup on disconnect
+3. **Connection pooling**: Consider connection limits or pooling
+4. **Health monitoring**: Add connection count monitoring to `/api/health`
 
-From PRD section on "Stuck Detection" - checks agent health.
+## Environment
 
-```yaml
-name: health-monitor
-model: haiku
-tools: Bash, Read
-description: Check agent health, detect stuck sessions, analyze logs, suggest interventions
-```
+- Node.js 20
+- xterm.js (version in package.json)
+- WSL2 on Windows
 
-## File Structure
+## Priority
 
-```
-~/.panopticon/agents/           # Canonical source
-├── code-review-correctness.md
-├── code-review-security.md
-├── code-review-performance.md
-├── code-review-synthesis.md
-├── planning-agent.md
-├── codebase-explorer.md
-├── triage-agent.md
-└── health-monitor.md
-```
-
-These would be symlinked to `~/.claude/agents/` via `pan sync`.
-
-## Acceptance Criteria
-
-- [ ] Create 8 subagent template files
-- [ ] Each subagent has appropriate tool restrictions (read-only where applicable)
-- [ ] Each subagent uses cost-appropriate model (haiku for simple tasks)
-- [ ] Update `pan sync` to symlink agents to `~/.claude/agents/`
-- [ ] Document subagent usage in README
-- [ ] Test convoy pattern with parallel review agents
-
-## References
-
-- PRD Section: "Parallel Agent Execution (Convoys via Skills)"
-- PRD Section: "Part 7: Stuck Detection and Health Monitoring"
-- Claude Code Subagent Docs: https://docs.anthropic.com/en/docs/claude-code/sub-agents
+P2 - Annoying but has workarounds (tmux attach, dashboard restart)
 
 ---
 

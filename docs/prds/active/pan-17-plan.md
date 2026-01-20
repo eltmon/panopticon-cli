@@ -147,40 +147,6 @@ app.get('/api/health', (_req, res) => {
 | Debounce makes resize feel sluggish | Use 200ms which is imperceptible for most users |
 | Auto-reconnect loops on persistent failure | Cap retries at 5, then show manual reconnect |
 
-## Current Status
-
-**Implementation: COMPLETE** ✓
-
-All four tasks have been implemented:
-
-1. ✅ **Debounce resize messages** (panopticon-20i)
-   - Added debounce utility function
-   - Applied 200ms debounce to ResizeObserver callback
-   - Applied 200ms debounce to window resize handler
-
-2. ✅ **Convert terminal-path execSync to async** (panopticon-1sj)
-   - Converted WebSocket connection tmux list-sessions (line 4106)
-   - Converted resize handler tmux resize-window (line 4158)
-   - Converted /api/agents endpoint (line 1030)
-   - Converted /api/agents/:id/output endpoint (line 1088)
-   - All terminal-critical and polling operations now non-blocking
-
-3. ✅ **Add connection metrics to /api/health** (panopticon-r3f)
-   - Extended /api/health endpoint with websockets count and activePtys count
-   - Moved endpoint definition to after wss and activePtys are created
-
-4. ✅ **Add auto-reconnect logic** (panopticon-l9w)
-   - Implemented exponential backoff: 1s → 2s → 4s → 8s → max 30s
-   - Shows "Reconnecting in Xs..." messages with attempt count
-   - Reuses terminal instance during reconnection to preserve screen state
-   - Caps at 5 attempts, then shows "Connection lost" message
-   - Resets attempt counter on successful reconnection
-
-**Next Steps:**
-- Manual testing of terminal performance
-- Verify no regressions in normal terminal usage
-- Test reconnection scenarios (backend restart, network interruption)
-
 ## Out of Scope (Explicitly)
 
 - Converting ALL execSync calls (too risky for this issue, do incrementally)

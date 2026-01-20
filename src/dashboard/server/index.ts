@@ -3,10 +3,14 @@ import cors from 'cors';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as pty from 'node-pty';
-import { execSync, spawn } from 'child_process';
+import { execSync, exec, spawn } from 'child_process';
+import { promisify } from 'util';
 import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
+
+// Promisified exec for non-blocking operations
+const execAsync = promisify(exec);
 
 // Ensure tmux server is running (starts one if not)
 function ensureTmuxRunning(): void {
@@ -350,11 +354,6 @@ async function fetchGitHubIssues(): Promise<any[]> {
   console.log(`Fetched ${allIssues.length} GitHub issues`);
   return allIssues;
 }
-
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
 
 // Get Linear issues using raw GraphQL for efficiency (single query with all data)
 // Query params:
@@ -1021,13 +1020,11 @@ function getGitStatus(workspacePath: string): { branch: string; uncommittedFiles
 }
 
 // Get running agents from tmux sessions
-app.get('/api/agents', (_req, res) => {
+app.get('/api/agents', async (_req, res) => {
   try {
-    const result = execSync('tmux list-sessions -F "#{session_name}|#{session_created}" 2>/dev/null || true', {
-      encoding: 'utf-8',
-    });
+    const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}|#{session_created}" 2>/dev/null || true');
 
-    const agents = result
+    const agents = stdout
       .trim()
       .split('\n')
       .filter((line) => line.startsWith('agent-'))
@@ -1078,17 +1075,17 @@ app.get('/api/agents', (_req, res) => {
 });
 
 // Get agent output
-app.get('/api/agents/:id/output', (req, res) => {
+app.get('/api/agents/:id/output', async (req, res) => {
   const { id } = req.params;
   const lines = req.query.lines || 100;
 
   try {
-    const output = execSync(
+    const { stdout } = await execAsync(
       `tmux capture-pane -t "${id}" -p -S -${lines} 2>/dev/null || echo "Session not found"`,
-      { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
+      { maxBuffer: 10 * 1024 * 1024 }
     );
 
-    res.json({ output });
+    res.json({ output: stdout });
   } catch (error) {
     res.json({ output: 'Failed to capture output' });
   }
@@ -4350,6 +4347,18 @@ const wss = new WebSocketServer({ server, path: '/ws/terminal' });
 // Track active PTY sessions
 const activePtys = new Map<string, pty.IPty>();
 
+// Health check endpoint (must be after wss and activePtys are defined)
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    connections: {
+      websockets: wss.clients.size,
+      activePtys: activePtys.size
+    }
+  });
+});
+
 wss.on('connection', (ws: WebSocket, req) => {
   // Parse session name from URL query param: /ws/terminal?session=planning-min-123
   const url = new URL(req.url || '', `http://${req.headers.host}`);
@@ -4362,90 +4371,90 @@ wss.on('connection', (ws: WebSocket, req) => {
 
   console.log(`WebSocket connected for session: ${sessionName}`);
 
-  // Check if tmux session exists
-  try {
-    const sessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
-      encoding: 'utf-8',
-    }).trim().split('\n').filter(Boolean);
+  // Check if tmux session exists (async to avoid blocking event loop)
+  (async () => {
+    try {
+      const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""');
+      const sessions = stdout.trim().split('\n').filter(Boolean);
 
-    if (!sessions.includes(sessionName)) {
-      ws.close(1008, `Session ${sessionName} not found`);
+      if (!sessions.includes(sessionName)) {
+        ws.close(1008, `Session ${sessionName} not found`);
+        return;
+      }
+    } catch {
+      ws.close(1008, 'Failed to list tmux sessions');
       return;
     }
-  } catch {
-    ws.close(1008, 'Failed to list tmux sessions');
-    return;
-  }
 
-  // Spawn a PTY that attaches to the tmux session
-  // The PTY will receive the full screen content including alternate buffer
-  const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', sessionName], {
-    name: 'xterm-256color',
-    cols: 120,
-    rows: 40,
-    cwd: homedir(),
-    env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' } as { [key: string]: string },
-  });
+    // Spawn a PTY that attaches to the tmux session
+    // The PTY will receive the full screen content including alternate buffer
+    const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', sessionName], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 40,
+      cwd: homedir(),
+      env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' } as { [key: string]: string },
+    });
 
-  activePtys.set(sessionName, ptyProcess);
+    activePtys.set(sessionName, ptyProcess);
 
-  // Forward PTY output to WebSocket
-  ptyProcess.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
-    }
-  });
-
-  // Handle PTY exit
-  ptyProcess.onExit(({ exitCode }) => {
-    console.log(`PTY for ${sessionName} exited with code ${exitCode}`);
-    activePtys.delete(sessionName);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.close(1000, 'Session ended');
-    }
-  });
-
-  // Forward WebSocket input to PTY
-  ws.on('message', (data) => {
-    const message = data.toString();
-
-    // Handle resize messages (JSON format: {"type":"resize","cols":80,"rows":24})
-    // Only attempt JSON parse if message looks like JSON (starts with '{')
-    if (message.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(message);
-        if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-          // Resize both PTY and tmux window
-          ptyProcess.resize(parsed.cols, parsed.rows);
-          try {
-            execSync(`tmux resize-window -t ${sessionName} -x ${parsed.cols} -y ${parsed.rows} 2>/dev/null || true`, { encoding: 'utf-8' });
-          } catch { /* ignore */ }
-          return;
-        }
-      } catch {
-        // Invalid JSON, treat as terminal input
+    // Forward PTY output to WebSocket
+    ptyProcess.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
       }
-    }
+    });
 
-    ptyProcess.write(message);
-  });
+    // Handle PTY exit
+    ptyProcess.onExit(({ exitCode }) => {
+      console.log(`PTY for ${sessionName} exited with code ${exitCode}`);
+      activePtys.delete(sessionName);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, 'Session ended');
+      }
+    });
 
-  // Clean up on WebSocket close
-  ws.on('close', () => {
-    console.log(`WebSocket closed for session: ${sessionName}`);
-    // Detach from tmux (Ctrl-b d) before killing PTY to leave tmux session running
-    ptyProcess.write('\x02d'); // Ctrl-b d
-    setTimeout(() => {
+    // Forward WebSocket input to PTY
+    ws.on('message', (data) => {
+      const message = data.toString();
+
+      // Handle resize messages (JSON format: {"type":"resize","cols":80,"rows":24})
+      // Only attempt JSON parse if message looks like JSON (starts with '{')
+      if (message.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(message);
+          if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+            // Resize both PTY and tmux window (async to avoid blocking)
+            ptyProcess.resize(parsed.cols, parsed.rows);
+            execAsync(`tmux resize-window -t ${sessionName} -x ${parsed.cols} -y ${parsed.rows} 2>/dev/null || true`)
+              .catch(() => { /* ignore resize errors */ });
+            return;
+          }
+        } catch {
+          // Invalid JSON, treat as terminal input
+        }
+      }
+
+      ptyProcess.write(message);
+    });
+
+    // Clean up on WebSocket close
+    ws.on('close', () => {
+      console.log(`WebSocket closed for session: ${sessionName}`);
+      // Detach from tmux (Ctrl-b d) before killing PTY to leave tmux session running
+      ptyProcess.write('\x02d'); // Ctrl-b d
+      setTimeout(() => {
+        ptyProcess.kill();
+        activePtys.delete(sessionName);
+      }, 100);
+    });
+
+    ws.on('error', (err) => {
+      console.error(`WebSocket error for ${sessionName}:`, err);
       ptyProcess.kill();
       activePtys.delete(sessionName);
-    }, 100);
-  });
-
-  ws.on('error', (err) => {
-    console.error(`WebSocket error for ${sessionName}:`, err);
-    ptyProcess.kill();
-    activePtys.delete(sessionName);
-  });
+    });
+  })();
 });
 
 server.listen(PORT, '0.0.0.0', () => {
