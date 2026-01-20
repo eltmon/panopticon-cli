@@ -1,59 +1,141 @@
-# Planning Session: PAN-4
+# Planning Session: PAN-6
+
+## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
+
+**YOU ARE IN PLANNING MODE. DO NOT:**
+- Write or modify any code files (except STATE.md)
+- Run implementation commands (npm install, docker compose, make, etc.)
+- Create actual features or functionality
+- Start implementing the solution
+
+**YOU SHOULD ONLY:**
+- Ask clarifying questions (use AskUserQuestion tool)
+- Explore the codebase to understand context (read files, grep)
+- Generate planning artifacts:
+  - STATE.md (decisions, approach, architecture)
+  - Beads tasks (via `bd create`)
+  - PRD file at `docs/prds/active/{issue-id}-plan.md` (copy of STATE.md, required for dashboard)
+- Present options and tradeoffs for the user to decide
+
+When planning is complete, STOP and tell the user: "Planning complete - click Done when ready to hand off to an agent for implementation."
+
+---
 
 ## Issue Details
-- **ID:** PAN-4
-- **Title:** Set up Traefik + panopticon.dev local domain
-- **URL:** https://github.com/eltmon/panopticon-cli/issues/4
+- **ID:** PAN-6
+- **Title:** Add subagent templates for common orchestration patterns
+- **URL:** https://github.com/eltmon/panopticon-cli/issues/6
 
 ## Description
-## Overview
-Configure Panopticon to be accessible at `https://panopticon.dev` locally using Traefik reverse proxy and mkcert for SSL certificates.
+## Background
 
-## Goals
-- Local HTTPS access via `https://panopticon.dev`
-- Automatic SSL certificate generation with mkcert
-- Traefik as reverse proxy for routing
-- Works across Linux, macOS, Windows/WSL2
+Panopticon plans to ship with 10+ Skills (reusable workflow prompts), but should ALSO ship **Subagents** for patterns that benefit from isolation, parallel execution, or tool restrictions.
 
-## Technical Requirements
+### Skills vs Subagents
 
-### 1. Traefik Configuration
-- Docker-based Traefik setup
-- Dynamic configuration for Panopticon services
-- Dashboard accessible (optional, for debugging)
+| Concept | Isolation | Use Case |
+|---------|-----------|----------|
+| **Skills** | None - runs in main conversation | Reusable workflow guidance |
+| **Subagents** | Separate context window | Parallel work, tool restrictions, cost optimization |
 
-### 2. SSL Certificates
-- Use mkcert for local CA and certificates
-- Auto-trust in system certificate store
-- Wildcard cert for `*.panopticon.dev` if needed
+Claude Code subagents are Markdown files with YAML frontmatter that define isolated AI agents with their own context, tool restrictions, and model selection.
 
-### 3. DNS Resolution
-- `/etc/hosts` entry for Linux/macOS
-- Windows hosts file for WSL2
-- Document dnsmasq alternative for wildcard domains
+## Proposed Subagents
 
-### 4. Service Routing
-| URL | Service |
-|-----|---------|
-| `https://panopticon.dev` | Frontend (port 3001) |
-| `https://panopticon.dev/api` | API server (port 3002) |
+Based on PRD patterns (Convoy, Planning, Triage, Health Monitoring):
+
+### 1. Convoy Review Agents (Parallel Code Review)
+
+From PRD: `pan convoy start code-review --issue MIN-648` spawns parallel reviewers.
+
+| Subagent | Model | Tools | Purpose |
+|----------|-------|-------|---------|
+| `code-review-correctness` | haiku | Read, Grep, Glob | Logic errors, edge cases, null handling |
+| `code-review-security` | sonnet | Read, Grep, Glob | OWASP Top 10, vulnerabilities |
+| `code-review-performance` | haiku | Read, Grep, Glob | Algorithms, N+1 queries, memory |
+| `code-review-synthesis` | sonnet | Read, Write | Combine findings, write final report |
+
+### 2. Planning Agent
+
+For `work plan <id>` - creates execution plans before spawning workers.
+
+```yaml
+name: planning-agent
+model: sonnet
+tools: Read, Grep, Glob, WebFetch
+permissionMode: plan
+description: Research codebase and create detailed execution plans for issues
+```
+
+### 3. Codebase Explorer
+
+Fast read-only exploration for understanding new codebases.
+
+```yaml
+name: codebase-explorer
+model: haiku
+tools: Read, Grep, Glob, Bash
+description: Fast read-only codebase exploration. Use for architecture discovery and understanding.
+```
+
+### 4. Triage Agent
+
+For `work triage` - helps categorize and prioritize issues from secondary trackers.
+
+```yaml
+name: triage-agent
+model: haiku
+tools: Read, Grep, Glob
+description: Triage issues from secondary trackers, categorize by type and estimate complexity
+```
+
+### 5. Health Monitor (Deacon)
+
+From PRD section on "Stuck Detection" - checks agent health.
+
+```yaml
+name: health-monitor
+model: haiku
+tools: Bash, Read
+description: Check agent health, detect stuck sessions, analyze logs, suggest interventions
+```
+
+## File Structure
+
+```
+~/.panopticon/agents/           # Canonical source
+├── code-review-correctness.md
+├── code-review-security.md
+├── code-review-performance.md
+├── code-review-synthesis.md
+├── planning-agent.md
+├── codebase-explorer.md
+├── triage-agent.md
+└── health-monitor.md
+```
+
+These would be symlinked to `~/.claude/agents/` via `pan sync`.
 
 ## Acceptance Criteria
-- [ ] `https://panopticon.dev` loads the dashboard
-- [ ] API calls work via `/api` path
-- [ ] No browser SSL warnings
-- [ ] Setup works on fresh install via `pan setup` or skill
 
-## Related
-- Part of #3 (Comprehensive Agent Skills Suite)
+- [ ] Create 8 subagent template files
+- [ ] Each subagent has appropriate tool restrictions (read-only where applicable)
+- [ ] Each subagent uses cost-appropriate model (haiku for simple tasks)
+- [ ] Update `pan sync` to symlink agents to `~/.claude/agents/`
+- [ ] Document subagent usage in README
+- [ ] Test convoy pattern with parallel review agents
+
+## References
+
+- PRD Section: "Parallel Agent Execution (Convoys via Skills)"
+- PRD Section: "Part 7: Stuck Detection and Health Monitoring"
+- Claude Code Subagent Docs: https://docs.anthropic.com/en/docs/claude-code/sub-agents
 
 ---
 
 ## Your Mission
 
-You are an Opus-level planning agent conducting a **discovery session** for this issue.
-
-Follow the gsd-plus questioning protocol:
+You are a planning agent conducting a **discovery session** for this issue.
 
 ### Phase 1: Understand Context
 1. Read the codebase to understand relevant files and patterns
@@ -67,12 +149,12 @@ Use AskUserQuestion tool to ask contextual questions:
 - What does "done" look like?
 - Are there edge cases we need to handle?
 
-### Phase 3: Generate Artifacts
+### Phase 3: Generate Artifacts (NO CODE!)
 When discovery is complete:
 1. Create STATE.md with decisions made
-2. Create beads tasks with dependencies
-3. Summarize the plan
+2. Create beads tasks with dependencies using `bd create`
+3. Summarize the plan and STOP
 
-**Remember:** Be a thinking partner, not an interviewer. Ask questions that help clarify, don't interrogate.
+**Remember:** Be a thinking partner, not an interviewer. Ask questions that help clarify.
 
 Start by exploring the codebase to understand the context, then begin the discovery conversation.

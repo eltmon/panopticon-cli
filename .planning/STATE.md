@@ -1,355 +1,331 @@
-# PAN-3: Comprehensive Agent Skills Suite - STATE
+# PAN-6: Add Subagent Templates for Common Orchestration Patterns
 
-## Issue Summary
-Create a full suite of `pan-*` skills that guide AI assistants through Panopticon operations. Skills should enable conversational guidance so users never need to learn CLI commands directly.
+## Overview
+
+Create 8 subagent templates for common orchestration patterns with full convoy integration and skills-based orchestration for parallel code review with automatic synthesis.
 
 ## Key Decisions
 
-### 1. Skill Purpose
-**Decision:** Skills are guidance wrappers + documentation.
-
-Skills help AI assistants:
-- Understand when to invoke which `pan` CLI commands
-- Guide users through configuration decisions
-- Provide context about how Panopticon components work together
-- Offer troubleshooting guidance
-
-### 2. Naming Convention
-**Decision:** Use `pan-*` (dashes) for directory names.
-
-- Directory: `~/.panopticon/skills/pan-help/`
-- Skill name in SKILL.md: Can use `pan:help` or `pan-help` (both work for invocation)
-- Matches existing skills: `bug-fix`, `feature-work`, `code-review-*`
-
-### 3. Skill Location & Distribution
-**Decision:** Repo is source of truth, runtime is a copy.
-
-**Distribution flow:**
-```
-repo/skills/pan-*/           ← SOURCE OF TRUTH (version controlled)
-       ↓ pan init / npm postinstall
-~/.panopticon/skills/pan-*/  ← Runtime copy (user's machine)
-       ↓ pan sync
-~/.claude/skills/pan-*/      ← Symlinked for AI tools
-```
-
-**Workflow for creating/updating skills (for agents working on PAN-3):**
-1. Create/edit skill in feature branch: `skills/{name}/SKILL.md`
-2. Commit to feature branch (`feature/pan-3`)
-3. Test locally by copying to `~/.panopticon/skills/` and running `pan sync`
-4. When done with phase, PR/review
-5. Merge to main
-6. On release: `npm publish` includes skills in package
-7. Users run `pan init` or update → skills copied to `~/.panopticon/skills/`
-
-**Current workspace path:** `/home/eltmon/projects/panopticon/workspaces/feature-pan-3/`
-**Skills directory:** `./skills/` (relative to workspace root)
-
-**Note:** Phase 1 skills already exist in both:
-- `~/.panopticon/skills/pan-*/` (working now via `pan sync`)
-- `./skills/pan-*/` (committed to repo)
-
-**Project-specific skills** (not Panopticon generic):
-- Live in `{project}/.claude/skills/` (git-tracked in the project)
-- These are NOT managed by Panopticon
-- `pan sync` adds Panopticon skills alongside, never replaces project skills
-- "Git-tracked always wins" - project skills take precedence
-
-### 4. Docker Templates
-**Decision:** Create app-type templates in `templates/docker/`
-
-Templates needed:
-- `spring-boot/` - Java/Spring with Maven, Postgres, Redis
-- `react-vite/` - React with Vite hot-reload
-- `nextjs/` - Next.js with app router
-- `dotnet/` - .NET Core with SQL Server
-- `python-fastapi/` - FastAPI with uvicorn
-- `monorepo/` - Frontend + backend combo
-
-Each template includes:
-- `Dockerfile.dev` - Development Dockerfile
-- `docker-compose.yml` - Service orchestration
-- `README.md` - Usage instructions
-
-### 5. Traefik/Networking
-**Decision:** Traefik infrastructure already exists (PAN-4).
-
-Skills (`pan-network`, `pan-docker`) will guide users through:
-- Using existing Traefik setup
-- Configuring workspace routing
-- Platform-specific DNS setup (Linux, macOS, WSL2)
-
-No new infrastructure needed - just guidance skills.
-
-## Scope
-
-### In Scope
-
-**Skills to create (organized by priority):**
-
-| Priority | Skill | Purpose |
-|----------|-------|---------|
-| P0 | `pan-help` | Entry point - overview of all commands and skills |
-| P0 | `pan-install` | Guide through npm install, dependencies, env setup |
-| P0 | `pan-setup` | First-time configuration wizard |
-| P0 | `pan-quickstart` | Combined: install → setup → first workspace |
-| P0 | `pan-up` | Start dashboard, API, Traefik |
-| P0 | `pan-down` | Graceful shutdown of all services |
-| P0 | `pan-status` | Check running agents, workspaces, health |
-| P0 | `pan-plan` | Planning workflow with AI discovery |
-| P0 | `pan-issue` | Create workspace + spawn agent |
-| P1 | `pan-config` | View/edit Panopticon configuration |
-| P1 | `pan-tracker` | Configure issue tracker (Linear/GitHub/GitLab) |
-| P1 | `pan-projects` | Add/remove managed projects |
-| P1 | `pan-docker` | Docker template selection and configuration |
-| P1 | `pan-network` | Traefik, local domains, platform-specific setup |
-| P1 | `pan-sync` | Sync skills to Claude Code |
-| P1 | `pan-approve` | Review + approve agent work, merge MR |
-| P1 | `pan-tell` | Send message to running agent |
-| P1 | `pan-kill` | Stop a running agent |
-| P1 | `pan-health` | System health check |
-| P1 | `pan-diagnose` | Interactive troubleshooting |
-| P2 | `pan-logs` | View logs from agents, dashboard, API |
-| P2 | `pan-rescue` | Recover stuck agents, clean orphaned workspaces |
-
-**Docker templates to create:**
-- `templates/docker/spring-boot/`
-- `templates/docker/react-vite/`
-- `templates/docker/nextjs/`
-- `templates/docker/dotnet/`
-- `templates/docker/python-fastapi/`
-- `templates/docker/monorepo/`
-
-### Out of Scope
-
-- New CLI commands (existing commands are sufficient)
-- New infrastructure (Traefik already set up)
-- State mapping configuration (`pan-states` deferred - complex topic)
-- Skill creation guidance (`skill-creator` already exists)
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Usage Model | Task tool delegation + Convoy integration | Subagents work both ways: auto-delegation via Task tool AND convoy orchestration |
+| Scope | All 8 agents + orchestration skill | Full implementation with convoy integration |
+| Source Location | `repo/agents/` | Mirror skills pattern: `repo/agents/` -> `~/.panopticon/agents/` -> `~/.claude/agents/` |
+| Sync Approach | Full SYNC_TARGETS integration | Modify paths.ts, sync.ts for consistency with skills/commands pattern |
+| Synthesis Flow | Skills-based orchestration | A skill (`pan-code-review`) spawns reviewers via Task, waits, then spawns synthesis |
+| Convoy Integration | Yes - in this PR | Convoy can specify subagent templates for parallel work |
+| Output Location | `.claude/reviews/` | Each reviewer writes timestamped findings; synthesis agent reads all files |
+| Constraints | No MCP servers | Don't add MCP server functionality |
 
 ## Architecture
 
-### Skill Structure
-
-Each skill follows this structure:
-```
-pan-{name}/
-├── SKILL.md          # Main guidance content with YAML frontmatter
-├── templates/        # (optional) Config templates, checklists
-└── resources/        # (optional) Reference docs, examples
-```
-
-### Skill YAML Frontmatter
-```yaml
----
-name: pan-help
-description: Overview of all Panopticon commands and capabilities
-triggers:
-  - pan help
-  - panopticon help
-  - what can panopticon do
-allowed-tools:
-  - Bash
-  - Read
----
-```
-
-### Skill Content Pattern
-
-Skills should include:
-1. **Overview** - What this skill helps with
-2. **When to use** - Trigger conditions
-3. **Workflow** - Step-by-step guidance
-4. **CLI commands** - Which `pan` commands to run
-5. **Troubleshooting** - Common issues and fixes
-
-## Implementation Order
-
-### Phase 1: Core Onboarding (P0)
-1. `pan-help` - Entry point, no dependencies
-2. `pan-install` - Installation guidance
-3. `pan-setup` - Configuration wizard
-4. `pan-quickstart` - Combines install + setup
-5. `pan-up` / `pan-down` - Service lifecycle
-6. `pan-status` - Health overview
-7. `pan-plan` - Planning workflow
-8. `pan-issue` - Workspace + agent creation
-
-### Phase 2: Configuration (P1)
-9. `pan-config` - Config management
-10. `pan-tracker` - Tracker setup
-11. `pan-projects` - Project management
-12. `pan-sync` - Skills sync
-
-### Phase 3: Docker & Networking (P1)
-13. Docker templates (all 6)
-14. `pan-docker` - Template selection
-15. `pan-network` - Networking guidance
-
-### Phase 4: Operations (P1)
-16. `pan-approve` - Work approval
-17. `pan-tell` / `pan-kill` - Agent management
-18. `pan-health` / `pan-diagnose` - Health & troubleshooting
-
-### Phase 5: Advanced (P2)
-19. `pan-logs` - Log viewing
-20. `pan-rescue` - Recovery operations
-
-## Critical Dependencies
+### File Structure
 
 ```
-pan-help (no deps - start here)
-    │
-    ├──► pan-install ──► pan-setup ──► pan-quickstart
-    │
-    ├──► pan-up/pan-down ──► pan-status
-    │
-    └──► pan-plan ──► pan-issue
-                         │
-                         ├──► pan-approve
-                         ├──► pan-tell
-                         └──► pan-kill
+repo/agents/                         # SOURCE OF TRUTH (committed)
+├── code-review-correctness.md       # Logic errors, edge cases
+├── code-review-security.md          # OWASP Top 10, vulnerabilities
+├── code-review-performance.md       # Algorithms, N+1, memory
+├── code-review-synthesis.md         # Combines findings, writes report
+├── planning-agent.md                # Research and plan creation
+├── codebase-explorer.md             # Fast read-only exploration
+├── triage-agent.md                  # Issue categorization
+└── health-monitor.md                # Stuck detection, log analysis
 
-Docker templates (can be parallel)
-    │
-    └──► pan-docker ──► pan-network
+repo/skills/
+├── pan-code-review/                 # NEW: Orchestration skill
+│   └── SKILL.md                     # Spawns 3 reviewers + synthesis
+└── [existing skills...]
 
-pan-config (no deps)
-    │
-    ├──► pan-tracker
-    ├──► pan-projects
-    └──► pan-sync
+~/.panopticon/agents/                # Runtime copy (from `pan init`)
+└── [copied on install/update]
 
-pan-health (no deps)
-    │
-    └──► pan-diagnose ──► pan-rescue
+~/.claude/agents/                    # Target (from `pan sync`)
+└── [symlinked from ~/.panopticon/agents/]
 ```
 
-## Current Status
+### Sync Flow
 
-### Phase 1: Core Onboarding (P0) - ✅ COMPLETE
+```
+pan init / npm postinstall
+    └── copies repo/agents/* to ~/.panopticon/agents/
 
-All 9 Phase 1 skills have been created:
+pan sync
+    └── symlinks ~/.panopticon/agents/* to ~/.claude/agents/*
+```
 
-| Skill | Location | Status |
-|-------|----------|--------|
-| `pan-help` | `~/.panopticon/skills/pan-help/` | ✅ Created & synced |
-| `pan-install` | `~/.panopticon/skills/pan-install/` | ✅ Created & synced |
-| `pan-setup` | `~/.panopticon/skills/pan-setup/` | ✅ Created & synced |
-| `pan-quickstart` | `~/.panopticon/skills/pan-quickstart/` | ✅ Created & synced |
-| `pan-up` | `~/.panopticon/skills/pan-up/` | ✅ Created & synced |
-| `pan-down` | `~/.panopticon/skills/pan-down/` | ✅ Created & synced |
-| `pan-status` | `~/.panopticon/skills/pan-status/` | ✅ Created & synced |
-| `pan-plan` | `~/.panopticon/skills/pan-plan/` | ✅ Created & synced |
-| `pan-issue` | `~/.panopticon/skills/pan-issue/` | ✅ Created & synced |
+### Convoy Integration
 
-Skills are:
-- ✅ Working in `~/.panopticon/skills/` (usable now via `pan sync`)
-- ✅ Committed to repo in `skills/` directory (commit `073b520`)
+The convoy system (`pan convoy`) will be extended to support subagent templates:
 
-### Remaining Work
+```bash
+# Current (issue-based):
+pan convoy create "Code Reviews" --issues MIN-1,MIN-2,MIN-3
 
-| Phase | Skills | Status |
-|-------|--------|--------|
-| Phase 2 | pan-config, pan-tracker, pan-projects, pan-sync | 🔲 Not started |
-| Phase 3 | Docker templates (6) + pan-docker, pan-network | 🔲 Not started |
-| Phase 4 | pan-approve, pan-tell, pan-kill, pan-health, pan-diagnose | 🔲 Not started |
-| Phase 5 | pan-logs, pan-rescue | 🔲 Not started |
+# New (template-based):
+pan convoy create "Code Review" --template code-review --files "src/**/*.ts"
 
-## Completed During Planning
+# Creates:
+# - agent-<convoy-id>-correctness (uses code-review-correctness.md)
+# - agent-<convoy-id>-security (uses code-review-security.md)
+# - agent-<convoy-id>-performance (uses code-review-performance.md)
+# - agent-<convoy-id>-synthesis (waits, then uses code-review-synthesis.md)
+```
 
-| Task | Status | Reference |
-|------|--------|-----------|
-| Fix planning prompt template to include PRD instruction | ✅ Done | [GitHub #7](https://github.com/eltmon/panopticon-cli/issues/7) |
-| Create Phase 1 skills (9 skills) | ✅ Done | Commit `073b520` |
+### Skills-Based Orchestration (pan-code-review)
 
-**Fix details:** Updated `src/dashboard/server/index.ts` to include PRD creation instruction in both the main planning prompt and continuation prompt templates.
-
-## Open Questions
-
-None - scope is clear enough to proceed.
-
-## Sample Skill Template
-
-Reference implementation for new skills:
+The `pan-code-review` skill orchestrates the full review pipeline:
 
 ```markdown
 ---
-name: pan-help
-description: Overview of all Panopticon commands and capabilities
+name: pan-code-review
+description: Orchestrated parallel code review with automatic synthesis
 ---
 
-# Panopticon Help
+# Pan Code Review
 
-## Overview
-[What this skill helps with]
-
-## When to Use
-- User asks about Panopticon capabilities
-- User is confused about which command to use
-- First-time users exploring the system
-
-## Available Commands
-
-### Getting Started
-| Command | Description |
-|---------|-------------|
-| `pan install` | Install dependencies and set up environment |
-| `pan up` | Start dashboard and services |
-| `pan status` | Check system health |
-
-### Work Management
-| Command | Description |
-|---------|-------------|
-| `pan work issue <id>` | Spawn agent for an issue |
-| `pan work status` | Show running agents |
-
-## Workflow
-1. Step one
-2. Step two
-3. Step three
-
-## Troubleshooting
-**Problem:** X doesn't work
-**Solution:** Do Y
+When invoked:
+1. Determine scope (git diff, specific files, or glob pattern)
+2. Spawn three parallel reviewers via Task tool:
+   - code-review-correctness
+   - code-review-security
+   - code-review-performance
+3. Each writes findings to `.claude/reviews/<timestamp>-<type>.md`
+4. When all complete, spawn code-review-synthesis to combine findings
+5. Present unified report to user
 ```
 
-## Beads Tasks Summary
+### Code Changes Required
 
-| Phase | Task ID | Description |
-|-------|---------|-------------|
-| 1 | panopticon-jh0 | pan-help skill (entry point) |
-| 1 | panopticon-24l | pan-install skill |
-| 1 | panopticon-ekw | pan-setup skill |
-| 1 | panopticon-n3d | pan-quickstart skill |
-| 1 | panopticon-le2 | pan-up skill |
-| 1 | panopticon-3py | pan-down skill |
-| 1 | panopticon-n05 | pan-status skill |
-| 1 | panopticon-yn9 | pan-plan skill |
-| 1 | panopticon-3c8 | pan-issue skill |
-| 2 | panopticon-83g | pan-config skill |
-| 2 | panopticon-d57 | pan-tracker skill |
-| 2 | panopticon-5l2 | pan-projects skill |
-| 2 | panopticon-5h2 | pan-sync skill |
-| 3 | panopticon-drg | Docker template: spring-boot |
-| 3 | panopticon-hqi | Docker template: react-vite |
-| 3 | panopticon-6pu | Docker template: nextjs |
-| 3 | panopticon-det | Docker template: dotnet |
-| 3 | panopticon-5zp | Docker template: python-fastapi |
-| 3 | panopticon-2f6 | Docker template: monorepo |
-| 3 | panopticon-20h | pan-docker skill |
-| 3 | panopticon-aze | pan-network skill |
-| 4 | panopticon-wch | pan-approve skill |
-| 4 | panopticon-0gu | pan-tell skill |
-| 4 | panopticon-6tw | pan-kill skill |
-| 4 | panopticon-d0e | pan-health skill |
-| 4 | panopticon-82r | pan-diagnose skill |
-| 5 | panopticon-0mg | pan-logs skill |
-| 5 | panopticon-6kx | pan-rescue skill |
+**1. agents/ directory** - Create 8 subagent templates
+- Each with YAML frontmatter (name, description, model, tools, permissionMode)
+- Body contains specialized review instructions
+
+**2. paths.ts** - Add agents to SYNC_TARGETS
+```typescript
+export const SYNC_TARGETS = {
+  claude: {
+    skills: join(CLAUDE_DIR, 'skills'),
+    commands: join(CLAUDE_DIR, 'commands'),
+    agents: join(CLAUDE_DIR, 'agents'),  // NEW
+  },
+  // ... same for codex, cursor, gemini
+};
+```
+
+**3. sync.ts** - Add agents sync logic
+- Extend `SyncPlan` interface with `agents: SyncItem[]`
+- Add agents planning in `planSync()`
+- Add agents execution in `executeSync()`
+
+**4. sync command** - Handle agents in dry-run and execution
+- Display agents in dry-run output
+- Include agents in backup directories
+- Report agents in sync results
+
+**5. init command** - Copy agents from package to ~/.panopticon/agents/
+- Similar to how skills are copied
+
+**6. convoy.ts / convoy command** - Add template-based convoy support
+- New `--template` flag that maps to subagent templates
+- Template defines which subagents to spawn
+- Synthesis agent waits for others to complete
+
+**7. pan-code-review skill** - Orchestration skill
+- Coordinates parallel review via Task tool
+- Manages shared output directory
+- Triggers synthesis when all reviews complete
+
+## Subagent Specifications
+
+### 1. code-review-correctness.md
+- **Model**: haiku (cost-efficient)
+- **Tools**: Read, Grep, Glob, Write (write to reviews dir)
+- **Focus**: Logic errors, edge cases, null handling, type safety
+- **Output**: `.claude/reviews/<timestamp>-correctness.md`
+
+### 2. code-review-security.md
+- **Model**: sonnet (needs deeper reasoning)
+- **Tools**: Read, Grep, Glob, Write
+- **Focus**: OWASP Top 10, injection, auth issues, data exposure
+- **Output**: `.claude/reviews/<timestamp>-security.md`
+
+### 3. code-review-performance.md
+- **Model**: haiku (pattern matching)
+- **Tools**: Read, Grep, Glob, Write
+- **Focus**: Algorithms, N+1 queries, memory leaks, caching
+- **Output**: `.claude/reviews/<timestamp>-performance.md`
+
+### 4. code-review-synthesis.md
+- **Model**: sonnet (synthesis requires reasoning)
+- **Tools**: Read, Write, Glob
+- **Focus**: Combine findings, prioritize, write unified report
+- **Input**: Reads from `.claude/reviews/*.md`
+- **Output**: Final report to user or `.claude/reviews/<timestamp>-synthesis.md`
+
+### 5. planning-agent.md
+- **Model**: sonnet (complex reasoning)
+- **Tools**: Read, Grep, Glob, WebFetch
+- **permissionMode**: plan (read-only exploration)
+- **Focus**: Codebase research, execution plan creation
+
+### 6. codebase-explorer.md
+- **Model**: haiku (fast, cheap)
+- **Tools**: Read, Grep, Glob, Bash (read-only commands)
+- **permissionMode**: plan
+- **Focus**: Architecture discovery, pattern finding
+
+### 7. triage-agent.md
+- **Model**: haiku (classification)
+- **Tools**: Read, Grep, Glob
+- **Focus**: Issue categorization, complexity estimation
+
+### 8. health-monitor.md
+- **Model**: haiku (log analysis)
+- **Tools**: Bash, Read (tmux, logs)
+- **Focus**: Stuck detection, intervention suggestions
+
+## Convoy Template System
+
+### Template Definition
+
+Templates define which subagents to spawn for a convoy type:
+
+```typescript
+// src/lib/convoy-templates.ts
+interface ConvoyTemplate {
+  name: string;
+  description: string;
+  agents: {
+    role: string;
+    subagent: string;  // references agents/*.md
+    parallel: boolean;
+    dependsOn?: string[];  // synthesis depends on others
+  }[];
+}
+
+const CODE_REVIEW_TEMPLATE: ConvoyTemplate = {
+  name: 'code-review',
+  description: 'Parallel code review with synthesis',
+  agents: [
+    { role: 'correctness', subagent: 'code-review-correctness', parallel: true },
+    { role: 'security', subagent: 'code-review-security', parallel: true },
+    { role: 'performance', subagent: 'code-review-performance', parallel: true },
+    { role: 'synthesis', subagent: 'code-review-synthesis', parallel: false, dependsOn: ['correctness', 'security', 'performance'] },
+  ],
+};
+```
+
+### Convoy CLI Changes
+
+```bash
+# New flags for convoy create:
+pan convoy create <name>
+  --template <template-name>  # Use subagent template
+  --files <glob-pattern>      # Files to review (for code-review)
+  --branch <branch>           # Branch to compare against
+
+# Example:
+pan convoy create "Review PR #123" --template code-review --files "src/**/*.ts"
+```
+
+### Convoy Execution
+
+1. Create convoy with template config
+2. Start parallel agents (correctness, security, performance)
+3. Each agent runs its subagent template via `claude --agent <subagent>`
+4. When parallel agents complete, start synthesis agent
+5. Synthesis reads `.convoy/` or `.claude/reviews/` directory
+6. Report completion to user
+
+## Implementation Phases
+
+### Phase 1: Core Subagents (Foundation)
+1. Create `repo/agents/` directory
+2. Create all 8 subagent templates
+3. Test that Claude Code recognizes them when copied to `~/.claude/agents/`
+
+### Phase 2: Sync Integration
+4. Update paths.ts - add agents to SYNC_TARGETS
+5. Update sync.ts - add agents to SyncPlan and sync logic
+6. Update sync command - handle agents in output
+7. Update init command - copy agents from package
+
+### Phase 3: Orchestration Skill
+8. Create `pan-code-review` skill
+9. Implement Task tool spawning logic
+10. Manage shared output directory
+11. Coordinate synthesis triggering
+
+### Phase 4: Convoy Integration
+12. Create convoy-templates.ts with template definitions
+13. Add `--template` flag to convoy create
+14. Implement template-based agent spawning
+15. Handle dependency ordering (synthesis waits)
+16. Update convoy status to show template info
+
+### Phase 5: Documentation & Testing
+17. Update README with subagent docs
+18. Create usage examples
+19. Test full parallel review flow
+20. Test convoy template flow
+
+## Testing Plan
+
+1. **Unit Tests**
+   - Test `planSync()` includes agents
+   - Test `executeSync()` creates agent symlinks
+   - Test convoy template resolution
+   - Test dependency ordering
+
+2. **Integration Tests**
+   - `pan sync --dry-run` shows agents
+   - `pan sync` creates symlinks
+   - `pan convoy create --template code-review` spawns correct agents
+   - Synthesis waits for parallel agents
+
+3. **E2E Testing**
+   - Run `/pan-code-review` on real code
+   - Verify all 3 reviews + synthesis
+   - Test convoy flow end-to-end
+
+## Dependencies
+
+```
+Phase 1: Core Subagents (no deps)
+    │
+    └──► Phase 2: Sync Integration (needs Phase 1)
+            │
+            └──► Phase 3: Orchestration Skill (needs Phase 2)
+                    │
+                    └──► Phase 4: Convoy Integration (needs Phase 2)
+                            │
+                            └──► Phase 5: Docs & Testing (needs all)
+```
+
+## Out of Scope
+
+- MCP server functionality
+- Auto-triggering reviews on git push (future: GUPP hooks)
+- Multiple convoy templates beyond code-review (can add later)
+- Custom user templates (can add later)
+
+## Open Questions
+
+1. **Convoy vs Task delegation** - When user says "review my code", should it auto-detect if convoy is needed (large diff) vs simple Task delegation (small diff)?
+   - **Proposed**: Start simple - user explicitly chooses `/pan-code-review` for orchestrated, or let Claude delegate to individual reviewers for quick checks.
+
+2. **Review output format** - Should reviews be Markdown or structured JSON for easier parsing?
+   - **Proposed**: Markdown for human readability. Synthesis agent parses markdown structure.
+
+3. **Concurrent convoy limit** - Should we limit parallel convoys?
+   - **Proposed**: Respect existing `maxParallel` setting from convoy config.
 
 ## References
 
-- Existing skills structure: `~/.panopticon/skills/bug-fix/SKILL.md`
-- CLI commands: `pan --help`, `pan work --help`
-- Traefik setup: `templates/traefik/`
-- PRD: `/home/eltmon/projects/panopticon/docs/PRD.md`
+- Issue: https://github.com/eltmon/panopticon-cli/issues/6
+- PRD Section: "Parallel Agent Execution (Convoys via Skills)"
+- PRD Section: "Part 7: Stuck Detection and Health Monitoring"
+- Claude Code Subagent Docs: https://docs.anthropic.com/en/docs/claude-code/sub-agents
+- Existing skill: `pan-subagent-creator` for subagent creation guidance
+- Existing convoy system: `src/cli/commands/convoy.ts`, `src/lib/convoy.ts`
