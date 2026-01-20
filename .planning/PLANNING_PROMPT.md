@@ -1,59 +1,88 @@
-# Planning Session: PAN-4
+# Planning Session: PAN-17
+
+## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
+
+**YOU ARE IN PLANNING MODE. DO NOT:**
+- Write or modify any code files (except STATE.md)
+- Run implementation commands (npm install, docker compose, make, etc.)
+- Create actual features or functionality
+- Start implementing the solution
+
+**YOU SHOULD ONLY:**
+- Ask clarifying questions (use AskUserQuestion tool)
+- Explore the codebase to understand context (read files, grep)
+- Generate planning artifacts:
+  - STATE.md (decisions, approach, architecture)
+  - Beads tasks (via `bd create`)
+  - PRD file at `docs/prds/active/{issue-id}-plan.md` (copy of STATE.md, required for dashboard)
+- Present options and tradeoffs for the user to decide
+
+When planning is complete, STOP and tell the user: "Planning complete - click Done when ready to hand off to an agent for implementation."
+
+---
 
 ## Issue Details
-- **ID:** PAN-4
-- **Title:** Set up Traefik + panopticon.dev local domain
-- **URL:** https://github.com/eltmon/panopticon-cli/issues/4
+- **ID:** PAN-17
+- **Title:** XTerminal performance issues with interactive prompts and connection handling
+- **URL:** https://github.com/eltmon/panopticon-cli/issues/17
 
 ## Description
-## Overview
-Configure Panopticon to be accessible at `https://panopticon.dev` locally using Traefik reverse proxy and mkcert for SSL certificates.
+## Problem
 
-## Goals
-- Local HTTPS access via `https://panopticon.dev`
-- Automatic SSL certificate generation with mkcert
-- Traefik as reverse proxy for routing
-- Works across Linux, macOS, Windows/WSL2
+The web-based terminal component (XTerminal) in the dashboard has several performance and usability issues:
 
-## Technical Requirements
+### 1. Arrow keys don't work properly in Claude Code interactive prompts
 
-### 1. Traefik Configuration
-- Docker-based Traefik setup
-- Dynamic configuration for Panopticon services
-- Dashboard accessible (optional, for debugging)
+When Claude Code displays an `AskUserQuestion` multi-select prompt:
+- Arrow keys don't move the selection cursor (`>`)
+- Instead, they behave like document editing navigation
+- Users cannot select options without using tmux directly
 
-### 2. SSL Certificates
-- Use mkcert for local CA and certificates
-- Auto-trust in system certificate store
-- Wildcard cert for `*.panopticon.dev` if needed
+**Workaround:** `tmux attach -t <session>` to interact directly
 
-### 3. DNS Resolution
-- `/etc/hosts` entry for Linux/macOS
-- Windows hosts file for WSL2
-- Document dnsmasq alternative for wildcard domains
+### 2. Port exhaustion on heavy usage
 
-### 4. Service Routing
-| URL | Service |
-|-----|---------|
-| `https://panopticon.dev` | Frontend (port 3001) |
-| `https://panopticon.dev/api` | API server (port 3002) |
+After extended use, the Vite proxy starts failing with:
+```
+Error: connect EADDRNOTAVAIL 127.0.0.1:3011 - Local (0.0.0.0:0)
+```
 
-## Acceptance Criteria
-- [ ] `https://panopticon.dev` loads the dashboard
-- [ ] API calls work via `/api` path
-- [ ] No browser SSL warnings
-- [ ] Setup works on fresh install via `pan setup` or skill
+This indicates ephemeral port exhaustion from websocket connections not being properly cleaned up.
 
-## Related
-- Part of #3 (Comprehensive Agent Skills Suite)
+### 3. Connection handling
+
+- Connections pile up over time (observed 100+ established connections to port 3011)
+- No apparent connection pooling or cleanup
+- Requires full dashboard restart to recover
+
+## Technical Context
+
+- XTerminal uses xterm.js + websocket to connect to tmux sessions
+- The websocket server is in `src/dashboard/server/index.ts`
+- Terminal component: `src/dashboard/frontend/src/components/XTerminal.tsx`
+
+## Suggested Improvements
+
+1. **Escape sequence passthrough**: Ensure arrow key escape sequences are properly passed through to the underlying tmux/Claude Code process
+2. **Connection cleanup**: Implement proper websocket connection cleanup on disconnect
+3. **Connection pooling**: Consider connection limits or pooling
+4. **Health monitoring**: Add connection count monitoring to `/api/health`
+
+## Environment
+
+- Node.js 20
+- xterm.js (version in package.json)
+- WSL2 on Windows
+
+## Priority
+
+P2 - Annoying but has workarounds (tmux attach, dashboard restart)
 
 ---
 
 ## Your Mission
 
-You are an Opus-level planning agent conducting a **discovery session** for this issue.
-
-Follow the gsd-plus questioning protocol:
+You are a planning agent conducting a **discovery session** for this issue.
 
 ### Phase 1: Understand Context
 1. Read the codebase to understand relevant files and patterns
@@ -67,12 +96,12 @@ Use AskUserQuestion tool to ask contextual questions:
 - What does "done" look like?
 - Are there edge cases we need to handle?
 
-### Phase 3: Generate Artifacts
+### Phase 3: Generate Artifacts (NO CODE!)
 When discovery is complete:
 1. Create STATE.md with decisions made
-2. Create beads tasks with dependencies
-3. Summarize the plan
+2. Create beads tasks with dependencies using `bd create`
+3. Summarize the plan and STOP
 
-**Remember:** Be a thinking partner, not an interviewer. Ask questions that help clarify, don't interrogate.
+**Remember:** Be a thinking partner, not an interviewer. Ask questions that help clarify.
 
 Start by exploring the codebase to understand the context, then begin the discovery conversation.
