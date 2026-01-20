@@ -2065,7 +2065,8 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
     // 5. Switch to main and pull latest
     try {
       execSync('git checkout main', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
-      execSync('git pull --ff-only', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      // Use explicit origin main to avoid tracking branch issues in worktrees
+      execSync('git pull origin main --ff-only', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
     } catch (checkoutErr: any) {
       return res.status(400).json({
         error: `Failed to checkout/update main branch: ${checkoutErr.message}`
