@@ -1,4 +1,4 @@
-# Planning Session: PAN-17
+# Planning Session: PAN-1
 
 ## CRITICAL: PLANNING ONLY - NO IMPLEMENTATION
 
@@ -22,61 +22,35 @@ When planning is complete, STOP and tell the user: "Planning complete - click Do
 ---
 
 ## Issue Details
-- **ID:** PAN-17
-- **Title:** XTerminal performance issues with interactive prompts and connection handling
-- **URL:** https://github.com/eltmon/panopticon-cli/issues/17
+- **ID:** PAN-1
+- **Title:** Add Rally support as secondary tracker
+- **URL:** https://github.com/eltmon/panopticon-cli/issues/1
 
 ## Description
-## Problem
+## Summary
 
-The web-based terminal component (XTerminal) in the dashboard has several performance and usability issues:
+Add support for Rally as a secondary issue tracker alongside Linear and GitHub.
 
-### 1. Arrow keys don't work properly in Claude Code interactive prompts
+## Context
 
-When Claude Code displays an `AskUserQuestion` multi-select prompt:
-- Arrow keys don't move the selection cursor (`>`)
-- Instead, they behave like document editing navigation
-- Users cannot select options without using tmux directly
+Panopticon currently supports:
+- **Linear** - Primary tracker (full support)
+- **GitHub Issues** - Secondary tracker (partial support)
 
-**Workaround:** `tmux attach -t <session>` to interact directly
+Rally (Broadcom) is a common enterprise issue tracker that should be supported for teams using it.
 
-### 2. Port exhaustion on heavy usage
+## Acceptance Criteria
 
-After extended use, the Vite proxy starts failing with:
-```
-Error: connect EADDRNOTAVAIL 127.0.0.1:3011 - Local (0.0.0.0:0)
-```
+- [ ] Rally API integration for fetching issues
+- [ ] Rally webhook support for real-time updates (if available)
+- [ ] Issue mapping from Rally to Panopticon workspace format
+- [ ] Documentation for Rally configuration
 
-This indicates ephemeral port exhaustion from websocket connections not being properly cleaned up.
+## Technical Notes
 
-### 3. Connection handling
-
-- Connections pile up over time (observed 100+ established connections to port 3011)
-- No apparent connection pooling or cleanup
-- Requires full dashboard restart to recover
-
-## Technical Context
-
-- XTerminal uses xterm.js + websocket to connect to tmux sessions
-- The websocket server is in `src/dashboard/server/index.ts`
-- Terminal component: `src/dashboard/frontend/src/components/XTerminal.tsx`
-
-## Suggested Improvements
-
-1. **Escape sequence passthrough**: Ensure arrow key escape sequences are properly passed through to the underlying tmux/Claude Code process
-2. **Connection cleanup**: Implement proper websocket connection cleanup on disconnect
-3. **Connection pooling**: Consider connection limits or pooling
-4. **Health monitoring**: Add connection count monitoring to `/api/health`
-
-## Environment
-
-- Node.js 20
-- xterm.js (version in package.json)
-- WSL2 on Windows
-
-## Priority
-
-P2 - Annoying but has workarounds (tmux attach, dashboard restart)
+- Rally REST API: https://rally1.rallydev.com/slm/webservice/v2.0/
+- Authentication via API key
+- Consider rate limiting implications
 
 ---
 
