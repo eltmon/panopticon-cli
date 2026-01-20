@@ -3,16 +3,17 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import ora from 'ora';
-import { INIT_DIRS, CONFIG_FILE, PANOPTICON_HOME, SKILLS_DIR } from '../../lib/paths.js';
+import { INIT_DIRS, CONFIG_FILE, PANOPTICON_HOME, SKILLS_DIR, AGENTS_DIR } from '../../lib/paths.js';
 import { getDefaultConfig, saveConfig } from '../../lib/config.js';
 import { detectShell, getShellRcFile, addAlias, getAliasInstructions } from '../../lib/shell.js';
 
-// Get the package root directory (where skills/ lives)
+// Get the package root directory (where skills/ and agents/ live)
 // Note: After bundling, code runs from dist/cli/index.js, so go up 2 levels
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PACKAGE_ROOT = join(__dirname, '..', '..'); // dist/cli -> dist -> package root
 const BUNDLED_SKILLS_DIR = join(PACKAGE_ROOT, 'skills');
+const BUNDLED_AGENTS_DIR = join(PACKAGE_ROOT, 'agents');
 
 /**
  * Copy bundled skills from package to ~/.panopticon/skills/
@@ -38,6 +39,36 @@ function copyBundledSkills(): number {
 
     // Copy skill directory (overwrites existing)
     cpSync(sourcePath, targetPath, { recursive: true });
+    copied++;
+  }
+
+  return copied;
+}
+
+/**
+ * Copy bundled agents from package to ~/.panopticon/agents/
+ * Returns the number of agents copied
+ */
+function copyBundledAgents(): number {
+  if (!existsSync(BUNDLED_AGENTS_DIR)) {
+    return 0;
+  }
+
+  // Ensure agents directory exists
+  if (!existsSync(AGENTS_DIR)) {
+    mkdirSync(AGENTS_DIR, { recursive: true });
+  }
+
+  const agents = readdirSync(BUNDLED_AGENTS_DIR, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.md'));
+
+  let copied = 0;
+  for (const agent of agents) {
+    const sourcePath = join(BUNDLED_AGENTS_DIR, agent.name);
+    const targetPath = join(AGENTS_DIR, agent.name);
+
+    // Copy agent file (overwrites existing)
+    cpSync(sourcePath, targetPath);
     copied++;
   }
 
@@ -74,6 +105,10 @@ export async function initCommand(): Promise<void> {
     spinner.text = 'Installing bundled skills...';
     const skillsCopied = copyBundledSkills();
 
+    // Copy bundled agents from package
+    spinner.text = 'Installing bundled agents...';
+    const agentsCopied = copyBundledAgents();
+
     // Detect shell and add alias
     const shell = detectShell();
     const rcFile = getShellRcFile(shell);
@@ -87,6 +122,9 @@ export async function initCommand(): Promise<void> {
       if (skillsCopied > 0) {
         console.log(chalk.green('✓') + ` Installed ${skillsCopied} bundled skills`);
       }
+      if (agentsCopied > 0) {
+        console.log(chalk.green('✓') + ` Installed ${agentsCopied} bundled agents`);
+      }
       console.log(chalk.green('✓') + ' ' + getAliasInstructions(shell));
     } else {
       spinner.succeed('Panopticon initialized!');
@@ -95,6 +133,9 @@ export async function initCommand(): Promise<void> {
       console.log(chalk.green('✓') + ' Created ' + chalk.cyan(CONFIG_FILE));
       if (skillsCopied > 0) {
         console.log(chalk.green('✓') + ` Installed ${skillsCopied} bundled skills`);
+      }
+      if (agentsCopied > 0) {
+        console.log(chalk.green('✓') + ` Installed ${agentsCopied} bundled agents`);
       }
       console.log(chalk.yellow('!') + ' Could not detect shell. Add alias manually:');
       console.log(chalk.dim('    alias pan="panopticon"'));

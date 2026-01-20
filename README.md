@@ -572,6 +572,7 @@ Panopticon ships with 25+ skills organized into categories:
 | `pan-docker` | Docker operations |
 | `pan-network` | Network diagnostics |
 | `pan-config` | Configuration management |
+| `pan-code-review` | Orchestrate parallel code review (3 reviewers + synthesis) |
 | `pan-convoy-synthesis` | Synthesize convoy coordination |
 | `pan-subagent-creator` | Create specialized subagents |
 | `pan-skill-creator` | Create new skills (guided) |
@@ -583,6 +584,98 @@ Panopticon ships with 25+ skills organized into categories:
 | `beads` | Git-backed issue tracking with dependencies |
 | `skill-creator` | Guide for creating new skills |
 | `web-design-guidelines` | UI/UX review checklist |
+
+## Subagents
+
+Panopticon includes specialized subagent templates for common development tasks. Subagents are invoked via the Task tool or convoy orchestration for parallel execution.
+
+### Code Review Subagents
+
+| Subagent | Model | Focus | Output |
+|----------|-------|-------|--------|
+| `code-review-correctness` | haiku | Logic errors, edge cases, type safety | `.claude/reviews/<timestamp>-correctness.md` |
+| `code-review-security` | sonnet | OWASP Top 10, vulnerabilities | `.claude/reviews/<timestamp>-security.md` |
+| `code-review-performance` | haiku | Algorithms, N+1 queries, memory | `.claude/reviews/<timestamp>-performance.md` |
+| `code-review-synthesis` | sonnet | Combines all findings into unified report | `.claude/reviews/<timestamp>-synthesis.md` |
+
+**Usage Example:**
+```bash
+/pan-code-review --files "src/auth/*.ts"
+```
+
+This spawns all three reviewers in parallel, then synthesizes their findings into a prioritized report.
+
+### Planning & Exploration Subagents
+
+| Subagent | Model | Focus | Permission Mode |
+|----------|-------|-------|-----------------|
+| `planning-agent` | sonnet | Codebase research, execution planning | `plan` (read-only) |
+| `codebase-explorer` | haiku | Fast architecture discovery, pattern finding | `plan` (read-only) |
+| `triage-agent` | haiku | Issue categorization, complexity estimation | default |
+| `health-monitor` | haiku | Agent stuck detection, log analysis | default |
+
+**Usage Examples:**
+```bash
+# Explore codebase architecture
+Task(subagent_type='codebase-explorer', prompt='Map out the authentication system')
+
+# Triage an issue
+Task(subagent_type='triage-agent', prompt='Categorize and estimate ISSUE-123')
+
+# Check agent health
+Task(subagent_type='health-monitor', prompt='Check status of all running agents')
+```
+
+### Parallel Code Review Workflow
+
+The `/pan-code-review` skill orchestrates a comprehensive parallel review:
+
+```
+1. Determine scope (git diff, files, or branch)
+2. Spawn 3 parallel reviewers:
+   ├─→ correctness (logic, types)
+   ├─→ security (vulnerabilities)
+   └─→ performance (bottlenecks)
+3. Each writes findings to .claude/reviews/
+4. Spawn synthesis agent
+5. Synthesis combines all findings
+6. Present unified, prioritized report
+```
+
+**Benefits:**
+- **3x faster** than sequential reviews
+- **Comprehensive coverage** across all dimensions
+- **Prioritized findings** (blocker > critical > high > medium > low)
+- **Actionable recommendations** with code examples
+
+**Review Output:**
+```markdown
+# Code Review - Complete Analysis
+
+## Executive Summary
+**Overall Assessment:** Needs Major Revisions
+**Key Findings:**
+- 1 blocker (SQL injection)
+- 4 critical issues
+- 6 high-priority items
+
+## Blocker Issues
+### 1. [Security] SQL Injection in login endpoint
+...
+
+## Critical Issues
+...
+```
+
+### Creating Custom Subagents
+
+Use the `/pan-subagent-creator` skill to create project-specific subagents:
+
+```bash
+/pan-subagent-creator
+```
+
+Subagent templates live in `~/.panopticon/agents/` and sync to `~/.claude/agents/`.
 
 ### Reserved Skill Names
 
