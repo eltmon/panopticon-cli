@@ -1,143 +1,346 @@
-# PAN-4: Traefik + Local Domain Setup - STATE
+# PAN-3: Comprehensive Agent Skills Suite - STATE
 
 ## Issue Summary
-Set up Traefik reverse proxy with HTTPS for local Panopticon development.
+Create a full suite of `pan-*` skills that guide AI assistants through Panopticon operations. Skills should enable conversational guidance so users never need to learn CLI commands directly.
 
-## Domain Decision
+## Key Decisions
 
-**Issue title says "panopticon.dev" but PRD specifies "pan.localhost"**
+### 1. Skill Purpose
+**Decision:** Skills are guidance wrappers + documentation.
 
-The PRD (which is the authoritative source) uses `*.localhost` domains:
-- `pan.localhost` - Panopticon dashboard
-- `traefik.pan.localhost` - Traefik dashboard
-- `feature-{issue}.{project}.localhost` - Workspace frontends
-- `api-feature-{issue}.{project}.localhost` - Workspace APIs
+Skills help AI assistants:
+- Understand when to invoke which `pan` CLI commands
+- Guide users through configuration decisions
+- Provide context about how Panopticon components work together
+- Offer troubleshooting guidance
 
-**Decision:** Follow the PRD and use `pan.localhost` (not `panopticon.dev`).
+### 2. Naming Convention
+**Decision:** Use `pan-*` (dashes) for directory names.
 
-**Rationale:**
-- `.localhost` is a reserved TLD that resolves to 127.0.0.1 on most systems
-- No risk of collision with real domains
-- Better cross-platform support
-- Consistent with workspace URL patterns already in MYN
+- Directory: `~/.panopticon/skills/pan-help/`
+- Skill name in SKILL.md: Can use `pan:help` or `pan-help` (both work for invocation)
+- Matches existing skills: `bug-fix`, `feature-work`, `code-review-*`
 
-## Architecture Decisions (from PRD)
+### 3. Skill Location & Distribution
+**Decision:** Two-location system for skills.
 
-### 1. Traefik Runs in Docker Only
-- **Not** containerizing the dashboard itself
-- Traefik proxies to host-based services via `host.docker.internal`
-- Dashboard continues to run on ports 3001 (frontend) and 3002 (API)
+**Runtime location:** `~/.panopticon/skills/`
+- This is where `pan sync` reads from
+- Skills here are immediately usable
+- `pan sync` creates symlinks to `~/.claude/skills/`, `~/.codex/skills/`, etc.
 
-### 2. Directory Structure
+**Version control:** `{repo}/skills/`
+- Skills are committed to the repo for distribution
+- On install, skills get copied from repo to `~/.panopticon/skills/`
+- This ensures new users get all bundled skills
+
+**Workflow for creating new skills:**
+1. Create skill in `~/.panopticon/skills/{name}/SKILL.md`
+2. Test with `pan sync` and verify it works
+3. Copy to repo: `cp -r ~/.panopticon/skills/{name} {repo}/skills/`
+4. Commit to repo for version control
+
+**Project-specific skills** (not Panopticon generic):
+- Live in `{project}/.claude/skills/` (git-tracked in the project)
+- These are NOT managed by Panopticon
+- `pan sync` adds Panopticon skills alongside, never replaces project skills
+- "Git-tracked always wins" - project skills take precedence
+
+### 4. Docker Templates
+**Decision:** Create app-type templates in `templates/docker/`
+
+Templates needed:
+- `spring-boot/` - Java/Spring with Maven, Postgres, Redis
+- `react-vite/` - React with Vite hot-reload
+- `nextjs/` - Next.js with app router
+- `dotnet/` - .NET Core with SQL Server
+- `python-fastapi/` - FastAPI with uvicorn
+- `monorepo/` - Frontend + backend combo
+
+Each template includes:
+- `Dockerfile.dev` - Development Dockerfile
+- `docker-compose.yml` - Service orchestration
+- `README.md` - Usage instructions
+
+### 5. Traefik/Networking
+**Decision:** Traefik infrastructure already exists (PAN-4).
+
+Skills (`pan-network`, `pan-docker`) will guide users through:
+- Using existing Traefik setup
+- Configuring workspace routing
+- Platform-specific DNS setup (Linux, macOS, WSL2)
+
+No new infrastructure needed - just guidance skills.
+
+## Scope
+
+### In Scope
+
+**Skills to create (organized by priority):**
+
+| Priority | Skill | Purpose |
+|----------|-------|---------|
+| P0 | `pan-help` | Entry point - overview of all commands and skills |
+| P0 | `pan-install` | Guide through npm install, dependencies, env setup |
+| P0 | `pan-setup` | First-time configuration wizard |
+| P0 | `pan-quickstart` | Combined: install → setup → first workspace |
+| P0 | `pan-up` | Start dashboard, API, Traefik |
+| P0 | `pan-down` | Graceful shutdown of all services |
+| P0 | `pan-status` | Check running agents, workspaces, health |
+| P0 | `pan-plan` | Planning workflow with AI discovery |
+| P0 | `pan-issue` | Create workspace + spawn agent |
+| P1 | `pan-config` | View/edit Panopticon configuration |
+| P1 | `pan-tracker` | Configure issue tracker (Linear/GitHub/GitLab) |
+| P1 | `pan-projects` | Add/remove managed projects |
+| P1 | `pan-docker` | Docker template selection and configuration |
+| P1 | `pan-network` | Traefik, local domains, platform-specific setup |
+| P1 | `pan-sync` | Sync skills to Claude Code |
+| P1 | `pan-approve` | Review + approve agent work, merge MR |
+| P1 | `pan-tell` | Send message to running agent |
+| P1 | `pan-kill` | Stop a running agent |
+| P1 | `pan-health` | System health check |
+| P1 | `pan-diagnose` | Interactive troubleshooting |
+| P2 | `pan-logs` | View logs from agents, dashboard, API |
+| P2 | `pan-rescue` | Recover stuck agents, clean orphaned workspaces |
+
+**Docker templates to create:**
+- `templates/docker/spring-boot/`
+- `templates/docker/react-vite/`
+- `templates/docker/nextjs/`
+- `templates/docker/dotnet/`
+- `templates/docker/python-fastapi/`
+- `templates/docker/monorepo/`
+
+### Out of Scope
+
+- New CLI commands (existing commands are sufficient)
+- New infrastructure (Traefik already set up)
+- State mapping configuration (`pan-states` deferred - complex topic)
+- Skill creation guidance (`skill-creator` already exists)
+
+## Architecture
+
+### Skill Structure
+
+Each skill follows this structure:
 ```
-~/.panopticon/
-├── traefik/
-│   ├── docker-compose.yml      # Traefik container definition
-│   ├── traefik.yml             # Static config
-│   ├── dynamic/                # Dynamic configs (per-workspace)
-│   │   └── panopticon.yml      # Dashboard routing config
-│   └── certs/
-│       ├── _wildcard.pan.localhost.pem
-│       └── _wildcard.pan.localhost-key.pem
-├── certs/                      # mkcert certificates (existing)
-└── config.toml                 # Updated with traefik settings
+pan-{name}/
+├── SKILL.md          # Main guidance content with YAML frontmatter
+├── templates/        # (optional) Config templates, checklists
+└── resources/        # (optional) Reference docs, examples
 ```
 
-### 3. mkcert Certificate Generation
-```bash
-mkcert "*.pan.localhost" "*.localhost" localhost 127.0.0.1 ::1
-```
-Generates wildcard certs for:
-- `*.pan.localhost` (Panopticon dashboard, Traefik dashboard)
-- `*.localhost` (project workspaces like `*.myn.localhost`)
-
-### 4. URL Routing
-| URL | Proxies To |
-|-----|------------|
-| `https://pan.localhost` | `http://host.docker.internal:3001` (dashboard frontend) |
-| `https://pan.localhost/api/*` | `http://host.docker.internal:3002` (dashboard API) |
-| `https://traefik.pan.localhost:8080` | Traefik dashboard |
-
-### 5. DNS Resolution
-
-#### Linux/macOS
-Add to `/etc/hosts`:
-```
-127.0.0.1 pan.localhost traefik.pan.localhost
-```
-Note: Only static entries needed. Wildcard `*.localhost` resolves automatically on modern systems.
-
-#### WSL2/Windows
-dnsmasq for wildcard DNS + Windows hosts sync:
-```bash
-# In /etc/dnsmasq.d/panopticon.conf
-address=/localhost/127.0.0.1
+### Skill YAML Frontmatter
+```yaml
+---
+name: pan-help
+description: Overview of all Panopticon commands and capabilities
+triggers:
+  - pan help
+  - panopticon help
+  - what can panopticon do
+allowed-tools:
+  - Bash
+  - Read
+---
 ```
 
-### 6. CLI Integration
+### Skill Content Pattern
 
-New commands:
-- `pan install` - Enhanced to set up Traefik (already has mkcert setup)
-- `pan up` - Start Traefik along with dashboard
-- `pan down` - Stop Traefik along with dashboard
-
-Config additions to `~/.panopticon/config.toml`:
-```toml
-[traefik]
-enabled = true
-dashboard_port = 8080
-domain = "pan.localhost"
-```
-
-### 7. Minimal Install (--minimal flag)
-Skip Traefik entirely, use port-based routing:
-- `http://localhost:3001` (dashboard frontend)
-- `http://localhost:3002` (dashboard API)
-
-## What's In Scope
-
-1. Traefik docker-compose.yml and configuration
-2. mkcert certificate generation for wildcard domains
-3. Static Traefik config (traefik.yml)
-4. Dynamic config for Panopticon dashboard routing
-5. Update `pan install` to set up Traefik
-6. Update `pan up` and `pan down` to manage Traefik container
-7. DNS/hosts file instructions and helper scripts
-8. Update config.toml schema for traefik settings
-
-## What's Out of Scope
-
-1. Workspace-specific dynamic routing (that's for workspace create/start)
-2. Project-specific routing (e.g., `*.myn.localhost`)
-3. Windows native support (WSL2 only for now)
-4. Automatic `/etc/hosts` modification (provide instructions + optional helper)
-
-## Open Questions
-
-None - PRD is comprehensive enough to proceed.
+Skills should include:
+1. **Overview** - What this skill helps with
+2. **When to use** - Trigger conditions
+3. **Workflow** - Step-by-step guidance
+4. **CLI commands** - Which `pan` commands to run
+5. **Troubleshooting** - Common issues and fixes
 
 ## Implementation Order
 
-| # | Task | Beads ID | Depends On |
-|---|------|----------|------------|
-| 1 | Create Traefik configuration templates | `panopticon-1dg` | - |
-| 2 | Implement mkcert wildcard certificate generation | `panopticon-5aw` | #1 |
-| 3 | Update pan install to set up Traefik | `panopticon-6cl` | #1, #2 |
-| 4 | Update pan up/down to manage Traefik container | `panopticon-8ca` | #3 |
-| 5 | Add traefik section to config.toml schema | `panopticon-dbt` | - |
-| 6 | Document DNS/hosts setup for each platform | `panopticon-qpo` | #4 |
-| 7 | End-to-end test: pan install && pan up | `panopticon-d0o` | #4, #6 |
+### Phase 1: Core Onboarding (P0)
+1. `pan-help` - Entry point, no dependencies
+2. `pan-install` - Installation guidance
+3. `pan-setup` - Configuration wizard
+4. `pan-quickstart` - Combines install + setup
+5. `pan-up` / `pan-down` - Service lifecycle
+6. `pan-status` - Health overview
+7. `pan-plan` - Planning workflow
+8. `pan-issue` - Workspace + agent creation
 
-## Critical Path
+### Phase 2: Configuration (P1)
+9. `pan-config` - Config management
+10. `pan-tracker` - Tracker setup
+11. `pan-projects` - Project management
+12. `pan-sync` - Skills sync
+
+### Phase 3: Docker & Networking (P1)
+13. Docker templates (all 6)
+14. `pan-docker` - Template selection
+15. `pan-network` - Networking guidance
+
+### Phase 4: Operations (P1)
+16. `pan-approve` - Work approval
+17. `pan-tell` / `pan-kill` - Agent management
+18. `pan-health` / `pan-diagnose` - Health & troubleshooting
+
+### Phase 5: Advanced (P2)
+19. `pan-logs` - Log viewing
+20. `pan-rescue` - Recovery operations
+
+## Critical Dependencies
 
 ```
-1. Traefik configs (panopticon-1dg)
-   ├──► 2. mkcert certs (panopticon-5aw)
-   │       └──► 3. pan install (panopticon-6cl)
-   │               └──► 4. pan up/down (panopticon-8ca)
-   │                       └──► 7. E2E test (panopticon-d0o)
-   │
-   └──► 5. config.toml schema (panopticon-dbt) [parallel]
+pan-help (no deps - start here)
+    │
+    ├──► pan-install ──► pan-setup ──► pan-quickstart
+    │
+    ├──► pan-up/pan-down ──► pan-status
+    │
+    └──► pan-plan ──► pan-issue
+                         │
+                         ├──► pan-approve
+                         ├──► pan-tell
+                         └──► pan-kill
 
-6. Docs (panopticon-qpo) can start after #4
+Docker templates (can be parallel)
+    │
+    └──► pan-docker ──► pan-network
+
+pan-config (no deps)
+    │
+    ├──► pan-tracker
+    ├──► pan-projects
+    └──► pan-sync
+
+pan-health (no deps)
+    │
+    └──► pan-diagnose ──► pan-rescue
 ```
+
+## Current Status
+
+### Phase 1: Core Onboarding (P0) - ✅ COMPLETE
+
+All 9 Phase 1 skills have been created:
+
+| Skill | Location | Status |
+|-------|----------|--------|
+| `pan-help` | `~/.panopticon/skills/pan-help/` | ✅ Created & synced |
+| `pan-install` | `~/.panopticon/skills/pan-install/` | ✅ Created & synced |
+| `pan-setup` | `~/.panopticon/skills/pan-setup/` | ✅ Created & synced |
+| `pan-quickstart` | `~/.panopticon/skills/pan-quickstart/` | ✅ Created & synced |
+| `pan-up` | `~/.panopticon/skills/pan-up/` | ✅ Created & synced |
+| `pan-down` | `~/.panopticon/skills/pan-down/` | ✅ Created & synced |
+| `pan-status` | `~/.panopticon/skills/pan-status/` | ✅ Created & synced |
+| `pan-plan` | `~/.panopticon/skills/pan-plan/` | ✅ Created & synced |
+| `pan-issue` | `~/.panopticon/skills/pan-issue/` | ✅ Created & synced |
+
+Skills are:
+- ✅ Working in `~/.panopticon/skills/` (usable now via `pan sync`)
+- ✅ Committed to repo in `skills/` directory (commit `073b520`)
+
+### Remaining Work
+
+| Phase | Skills | Status |
+|-------|--------|--------|
+| Phase 2 | pan-config, pan-tracker, pan-projects, pan-sync | 🔲 Not started |
+| Phase 3 | Docker templates (6) + pan-docker, pan-network | 🔲 Not started |
+| Phase 4 | pan-approve, pan-tell, pan-kill, pan-health, pan-diagnose | 🔲 Not started |
+| Phase 5 | pan-logs, pan-rescue | 🔲 Not started |
+
+## Completed During Planning
+
+| Task | Status | Reference |
+|------|--------|-----------|
+| Fix planning prompt template to include PRD instruction | ✅ Done | [GitHub #7](https://github.com/eltmon/panopticon-cli/issues/7) |
+| Create Phase 1 skills (9 skills) | ✅ Done | Commit `073b520` |
+
+**Fix details:** Updated `src/dashboard/server/index.ts` to include PRD creation instruction in both the main planning prompt and continuation prompt templates.
+
+## Open Questions
+
+None - scope is clear enough to proceed.
+
+## Sample Skill Template
+
+Reference implementation for new skills:
+
+```markdown
+---
+name: pan-help
+description: Overview of all Panopticon commands and capabilities
+---
+
+# Panopticon Help
+
+## Overview
+[What this skill helps with]
+
+## When to Use
+- User asks about Panopticon capabilities
+- User is confused about which command to use
+- First-time users exploring the system
+
+## Available Commands
+
+### Getting Started
+| Command | Description |
+|---------|-------------|
+| `pan install` | Install dependencies and set up environment |
+| `pan up` | Start dashboard and services |
+| `pan status` | Check system health |
+
+### Work Management
+| Command | Description |
+|---------|-------------|
+| `pan work issue <id>` | Spawn agent for an issue |
+| `pan work status` | Show running agents |
+
+## Workflow
+1. Step one
+2. Step two
+3. Step three
+
+## Troubleshooting
+**Problem:** X doesn't work
+**Solution:** Do Y
+```
+
+## Beads Tasks Summary
+
+| Phase | Task ID | Description |
+|-------|---------|-------------|
+| 1 | panopticon-jh0 | pan-help skill (entry point) |
+| 1 | panopticon-24l | pan-install skill |
+| 1 | panopticon-ekw | pan-setup skill |
+| 1 | panopticon-n3d | pan-quickstart skill |
+| 1 | panopticon-le2 | pan-up skill |
+| 1 | panopticon-3py | pan-down skill |
+| 1 | panopticon-n05 | pan-status skill |
+| 1 | panopticon-yn9 | pan-plan skill |
+| 1 | panopticon-3c8 | pan-issue skill |
+| 2 | panopticon-83g | pan-config skill |
+| 2 | panopticon-d57 | pan-tracker skill |
+| 2 | panopticon-5l2 | pan-projects skill |
+| 2 | panopticon-5h2 | pan-sync skill |
+| 3 | panopticon-drg | Docker template: spring-boot |
+| 3 | panopticon-hqi | Docker template: react-vite |
+| 3 | panopticon-6pu | Docker template: nextjs |
+| 3 | panopticon-det | Docker template: dotnet |
+| 3 | panopticon-5zp | Docker template: python-fastapi |
+| 3 | panopticon-2f6 | Docker template: monorepo |
+| 3 | panopticon-20h | pan-docker skill |
+| 3 | panopticon-aze | pan-network skill |
+| 4 | panopticon-wch | pan-approve skill |
+| 4 | panopticon-0gu | pan-tell skill |
+| 4 | panopticon-6tw | pan-kill skill |
+| 4 | panopticon-d0e | pan-health skill |
+| 4 | panopticon-82r | pan-diagnose skill |
+| 5 | panopticon-0mg | pan-logs skill |
+| 5 | panopticon-6kx | pan-rescue skill |
+
+## References
+
+- Existing skills structure: `~/.panopticon/skills/bug-fix/SKILL.md`
+- CLI commands: `pan --help`, `pan work --help`
+- Traefik setup: `templates/traefik/`
+- PRD: `/home/eltmon/projects/panopticon/docs/PRD.md`
