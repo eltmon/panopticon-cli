@@ -14,6 +14,7 @@ import {
   TRAEFIK_CERTS_DIR,
   SOURCE_TRAEFIK_TEMPLATES
 } from '../../lib/paths.js';
+import { getDefaultConfig, saveConfig } from '../../lib/config.js';
 
 export function registerInstallCommand(program: Command): void {
   program
@@ -319,33 +320,24 @@ async function installCommand(options: InstallOptions): Promise<void> {
   const configFile = join(PANOPTICON_HOME, 'config.toml');
   if (!existsSync(configFile)) {
     spinner.start('Creating default config...');
-    const traefikConfig = options.minimal ? 'enabled = false' : `enabled = true
-dashboard_port = 8080
-domain = "pan.localhost"`;
 
-    writeFileSync(
-      configFile,
-      `# Panopticon configuration
-[panopticon]
-version = "1.0.0"
-default_runtime = "claude"
+    // Get default config and customize based on install options
+    const config = getDefaultConfig();
 
-[dashboard]
-port = 3001
-api_port = 3002
+    // Configure Traefik based on minimal flag
+    if (options.minimal) {
+      config.traefik = {
+        enabled: false,
+      };
+    } else {
+      config.traefik = {
+        enabled: true,
+        dashboard_port: 8080,
+        domain: 'pan.localhost',
+      };
+    }
 
-[traefik]
-${traefikConfig}
-
-[sync]
-auto_sync = true
-strategy = "symlink"
-
-[health]
-ping_timeout = "30s"
-consecutive_failures = 3
-`
-    );
+    saveConfig(config);
     spinner.succeed('Config created');
   }
 
