@@ -62,10 +62,15 @@ export function XTerminal({ sessionName, onDisconnect }: XTerminalProps) {
     if (!term) {
       term = new Terminal({
         cursorBlink: true,
+        cursorStyle: 'block',
         fontSize: 14,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
         cols: 120,
         rows: 30,
+        scrollback: 10000,          // Increase scrollback buffer
+        convertEol: true,           // Convert \n to \r\n for proper display
+        scrollOnUserInput: true,    // Auto-scroll to bottom when user types
+        allowProposedApi: true,     // Enable proposed APIs for better compatibility
         theme: {
           background: '#1a1a2e',
           foreground: '#eaeaea',
@@ -95,6 +100,9 @@ export function XTerminal({ sessionName, onDisconnect }: XTerminalProps) {
       term.loadAddon(fit);
       term.open(terminalRef.current);
       fit.fit();
+
+      // Auto-focus the terminal to receive keyboard input
+      term.focus();
 
       terminalInstance.current = term;
       fitAddon.current = fit;
@@ -129,13 +137,19 @@ export function XTerminal({ sessionName, onDisconnect }: XTerminalProps) {
     };
 
     ws.onmessage = (event) => {
-      // Write data to terminal
+      // Write data to terminal and scroll to bottom
+      const writeAndScroll = (data: string | Uint8Array) => {
+        term.write(data);
+        // Always scroll to bottom when new data arrives
+        term.scrollToBottom();
+      };
+
       if (typeof event.data === 'string') {
-        term.write(event.data);
+        writeAndScroll(event.data);
       } else if (event.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(event.data));
+        writeAndScroll(new Uint8Array(event.data));
       } else if (event.data instanceof Blob) {
-        event.data.text().then(text => term.write(text));
+        event.data.text().then(text => writeAndScroll(text));
       }
     };
 
@@ -245,14 +259,22 @@ export function XTerminal({ sessionName, onDisconnect }: XTerminalProps) {
     };
   }, []);
 
+  // Click handler to focus terminal
+  const handleClick = () => {
+    terminalInstance.current?.focus();
+  };
+
   return (
     <div
       ref={terminalRef}
       className="absolute inset-0"
+      onClick={handleClick}
+      tabIndex={0}
       style={{
         padding: '8px',
         backgroundColor: '#1a1a2e',
         overflow: 'hidden',
+        outline: 'none',
       }}
     />
   );

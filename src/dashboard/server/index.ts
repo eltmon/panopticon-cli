@@ -4388,13 +4388,18 @@ wss.on('connection', (ws: WebSocket, req) => {
 
     // Spawn a PTY that attaches to the tmux session
     // The PTY will receive the full screen content including alternate buffer
+    // Initial dimensions match frontend xterm.js (120x30) to avoid resize flicker
     const ptyProcess = pty.spawn('tmux', ['attach-session', '-t', sessionName], {
       name: 'xterm-256color',
       cols: 120,
-      rows: 40,
+      rows: 30,
       cwd: homedir(),
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' } as { [key: string]: string },
     });
+
+    // Pre-resize tmux window to match initial PTY dimensions
+    execAsync(`tmux resize-window -t ${sessionName} -x 120 -y 30 2>/dev/null || true`)
+      .catch(() => { /* ignore initial resize errors */ });
 
     activePtys.set(sessionName, ptyProcess);
 
@@ -4424,10 +4429,16 @@ wss.on('connection', (ws: WebSocket, req) => {
         try {
           const parsed = JSON.parse(message);
           if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-            // Resize both PTY and tmux window (async to avoid blocking)
-            ptyProcess.resize(parsed.cols, parsed.rows);
+            // Resize tmux window FIRST, then PTY (order matters for proper sync)
+            // tmux resize triggers SIGWINCH which the application uses to redraw
             execAsync(`tmux resize-window -t ${sessionName} -x ${parsed.cols} -y ${parsed.rows} 2>/dev/null || true`)
-              .catch(() => { /* ignore resize errors */ });
+              .then(() => {
+                ptyProcess.resize(parsed.cols, parsed.rows);
+              })
+              .catch(() => {
+                // Still resize PTY even if tmux resize fails
+                ptyProcess.resize(parsed.cols, parsed.rows);
+              });
             return;
           }
         } catch {

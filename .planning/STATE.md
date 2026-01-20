@@ -176,10 +176,57 @@ All four tasks have been implemented:
    - Caps at 5 attempts, then shows "Connection lost" message
    - Resets attempt counter on successful reconnection
 
+**Additional Improvements (January 20, 2026):**
+
+5. ✅ **Enhanced xterm.js configuration**
+   - Added `scrollback: 10000` for larger history buffer
+   - Added `convertEol: true` for proper line ending handling
+   - Added `scrollOnUserInput: true` for auto-scroll on typing
+   - Added `cursorStyle: 'block'` for better TUI visibility
+   - Added `allowProposedApi: true` for better compatibility
+
+6. ✅ **Fixed scroll-to-bottom behavior**
+   - Terminal now auto-scrolls to bottom when new content arrives
+   - Added `term.scrollToBottom()` in message handler
+
+7. ✅ **Fixed dimension synchronization**
+   - Backend PTY now starts with 120x30 (matching frontend)
+   - Pre-resizes tmux window on connection
+   - Resize order fixed: tmux first, then PTY (ensures SIGWINCH propagates correctly)
+
+8. ✅ **Improved focus handling**
+   - Auto-focus terminal on mount
+   - Click-to-focus for better UX
+   - Added tabIndex for keyboard accessibility
+
+## Claude Code AskUserQuestion Bug (EXTERNAL ISSUE)
+
+**Issue Discovered:** Claude Code's `AskUserQuestion` TUI prompt does NOT render question options when running inside a nested PTY (PTY → tmux → Claude Code).
+
+**Symptoms:**
+- The heading text appears ("A few more questions to nail down the details:")
+- But the actual multi-select question options are invisible
+- Arrow keys, Enter, Space do nothing visible
+- Claude Code is waiting for input (process state: Ssl+)
+
+**Root Cause:** The TUI library used by Claude Code (likely @clack/prompts) doesn't properly render in environments where:
+- TERM=screen (set by tmux)
+- Running in a PTY attached to another PTY
+
+**This is NOT a Panopticon bug.** The same issue occurs when manually attaching to tmux and running Claude Code.
+
+**Workaround for users:**
+1. Use `tmux attach -t <session>` directly instead of XTerminal
+2. Cancel the AskUserQuestion and ask Claude to collect input differently
+3. Skip questions by pressing Escape (if supported)
+
+**Recommended action:** File bug report with Anthropic/Claude Code team.
+
 **Next Steps:**
 - Manual testing of terminal performance
 - Verify no regressions in normal terminal usage
 - Test reconnection scenarios (backend restart, network interruption)
+- File Claude Code bug report for AskUserQuestion rendering issue
 
 ## Out of Scope (Explicitly)
 
