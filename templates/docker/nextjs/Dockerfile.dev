@@ -1,0 +1,20 @@
+# Next.js Development Dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies first for caching
+COPY package*.json ./
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Expose Next.js dev server port
+EXPOSE 3000
+
+# Enable polling for Docker volume hot reload
+ENV WATCHPACK_POLLING=true
+
+# Run Next.js dev server
+CMD ["npm", "run", "dev"]

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useState, useEffect, useRef } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X, Loader2, CheckCircle2, AlertCircle, Sparkles, Play, Terminal, Square, Minus, FileText, ExternalLink } from 'lucide-react';
 import { Rnd } from 'react-rnd';
 import { Issue } from '../types';
@@ -49,6 +49,11 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
   const [position, setPosition] = useState({ x: -1, y: -1 }); // -1 means centered
   const [size, setSize] = useState({ width: 900, height: 600 });
 
+  // Track if we've actually connected to a planning session in THIS dialog instance
+  // This prevents stale cache from incorrectly triggering 'complete' state
+  const hasConnectedToSession = useRef(false);
+  const queryClient = useQueryClient();
+
   // Start planning mutation
   const startPlanningMutation = useMutation({
     mutationFn: async () => {
@@ -66,6 +71,7 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
     onSuccess: (data) => {
       setResult(data);
       if (data.planningAgent.started) {
+        hasConnectedToSession.current = true;
         setStep('planning');
       } else if (data.planningAgent.error) {
         setError(data.planningAgent.error);
@@ -127,15 +133,20 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
     },
   });
 
-  // Reset state when dialog closes
+  // Reset state when dialog closes/opens
   useEffect(() => {
     if (!isOpen) {
       setStep('checking'); // Start with checking on reopen
       setResult(null);
       setError(null);
       setMinimized(false);
+      hasConnectedToSession.current = false;
+    } else {
+      // Dialog is opening - invalidate stale cache to prevent false 'complete' transitions
+      queryClient.invalidateQueries({ queryKey: ['planningStatus', issue.identifier] });
+      hasConnectedToSession.current = false;
     }
-  }, [isOpen]);
+  }, [isOpen, issue.identifier, queryClient]);
 
   // Check if planning session already exists when dialog opens
   useEffect(() => {
@@ -146,6 +157,7 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
         .then((data: PlanningStatus) => {
           if (data.active) {
             // Session is running - connect to it directly (skip ready step)
+            hasConnectedToSession.current = true;
             setStep('planning');
           } else {
             // No active session - show ready step
@@ -161,7 +173,11 @@ export function PlanDialog({ issue, isOpen, onClose, onComplete }: PlanDialogPro
 
   // Watch for session ending while in planning step
   useEffect(() => {
-    if (step === 'planning' && statusQuery.data && !statusQuery.data.active) {
+    // Only transition to 'complete' if:
+    // 1. We're in the planning step
+    // 2. We have fresh status data showing session is inactive
+    // 3. We actually connected to a session in THIS dialog instance (not stale cache)
+    if (step === 'planning' && statusQuery.data && !statusQuery.data.active && hasConnectedToSession.current) {
       // Session is no longer active - it ended or was stopped
       setStep('complete');
     }

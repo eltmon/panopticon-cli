@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${APP_PORT:-5173}:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:3001}
+    networks:
+      - app-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-frontend}.rule=Host(`${HOSTNAME:-app.pan.localhost}`)"
+      - "traefik.http.services.${COMPOSE_PROJECT_NAME:-frontend}.loadbalancer.server.port=5173"
+
+networks:
+  app-network:
+    driver: bridge
+  traefik:
+    external: true
+    name: traefik_default

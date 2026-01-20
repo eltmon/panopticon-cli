@@ -79,6 +79,25 @@ node dist/cli/index.js doctor
 node dist/cli/index.js skills
 ```
 
+## Issue Tracking
+
+**Panopticon uses GitHub Issues only** - not Linear.
+
+- Issues: https://github.com/eltmon/panopticon-cli/issues
+- PRs: https://github.com/eltmon/panopticon-cli/pulls
+
+When working on issues, use `gh issue view` and `gh issue create` commands.
+
+## Beads vs GitHub Issues
+
+**IMPORTANT:** When Ed says "beads", he means the `bd` CLI tool for local git-backed issue tracking - NOT GitHub issues.
+
+- **Beads (`bd`)**: Local task tracking with dependencies, used for detailed sub-tasks
+- **GitHub Issues**: High-level feature requests and bugs
+
+Create beads with: `bd create --title "Task title" --type task`
+List beads with: `bd list`
+
 ## Testing Changes
 
 No automated tests yet. Manual testing:

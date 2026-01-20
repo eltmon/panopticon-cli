@@ -1,0 +1,22 @@
+# .NET Core Development Dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+
+WORKDIR /app
+
+# Install dotnet-watch for hot reload
+ENV DOTNET_USE_POLLING_FILE_WATCHER=true
+ENV DOTNET_WATCH_RESTART_ON_RUDE_EDIT=true
+
+# Copy csproj and restore dependencies
+COPY *.csproj ./
+RUN dotnet restore
+
+# Copy source code
+COPY . .
+
+# Expose default ASP.NET port
+EXPOSE 5000
+EXPOSE 5001
+
+# Run with hot reload
+CMD ["dotnet", "watch", "run", "--urls", "http://0.0.0.0:5000"]

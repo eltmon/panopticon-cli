@@ -1,0 +1,45 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts", "src/lib/**/*.ts"],
+  "entryPointStrategy": "expand",
+  "out": "docs/api",
+  "exclude": [
+    "**/node_modules/**",
+    "**/tests/**",
+    "**/dist/**",
+    "**/dashboard/**"
+  ],
+  "excludePrivate": true,
+  "excludeProtected": false,
+  "excludeInternal": true,
+  "includeVersion": true,
+  "readme": "README.md",
+  "name": "Panopticon API Documentation",
+  "navigationLinks": {
+    "GitHub": "https://github.com/eltmon/panopticon-cli",
+    "npm": "https://www.npmjs.com/package/panopticon-cli"
+  },
+  "plugin": [],
+  "theme": "default",
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": false
+  },
+  "categorizeByGroup": true,
+  "categoryOrder": [
+    "Configuration",
+    "Trackers",
+    "Agents",
+    "CLI",
+    "Utilities",
+    "*"
+  ],
+  "sort": ["source-order", "alphabetical"],
+  "visibilityFilters": {
+    "protected": true,
+    "private": false,
+    "inherited": true,
+    "external": false
+  }
+}

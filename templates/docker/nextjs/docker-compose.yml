@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+      - NEXT_TELEMETRY_DISABLED=1
+    networks:
+      - app-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-nextjs}.rule=Host(`${HOSTNAME:-app.pan.localhost}`)"
+      - "traefik.http.services.${COMPOSE_PROJECT_NAME:-nextjs}.loadbalancer.server.port=3000"
+
+networks:
+  app-network:
+    driver: bridge
+  traefik:
+    external: true
+    name: traefik_default
