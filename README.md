@@ -25,6 +25,115 @@ Panopticon is a unified orchestration layer for AI coding assistants. It works w
 - **Context Engineering** - Structured state management (STATE.md, WORKSPACE.md)
 - **Agent CVs** - Work history tracking for capability-based routing
 
+---
+
+## Legacy Codebase Support
+
+> **"AI works great on greenfield projects, but it's hopeless on our legacy code."**
+>
+> Sound familiar? Your developers aren't wrong. But they're not stuck, either.
+
+### The Problem Every Enterprise Faces
+
+AI coding assistants are trained on modern, well-documented open-source code. When they encounter your 15-year-old monolith with:
+
+- Mixed naming conventions (some `snake_case`, some `camelCase`, some `SCREAMING_CASE`)
+- Undocumented tribal knowledge ("we never touch the `processUser()` function directly")
+- Schemas that don't match the ORM ("the `accounts` table is actually users")
+- Three different async patterns in the same codebase
+- Build systems that require arcane incantations
+
+...they stumble. Repeatedly. Every session starts from zero.
+
+### Panopticon's Unique Solution: Adaptive Learning
+
+Panopticon includes two AI self-monitoring skills that **no other orchestration framework provides**:
+
+| Skill | What It Does | Business Impact |
+|-------|--------------|-----------------|
+| **Knowledge Capture** | Detects when AI makes mistakes or gets corrected, prompts to document the learning | AI gets smarter about YOUR codebase over time |
+| **Refactor Radar** | Identifies systemic code issues causing repeated AI confusion, creates actionable proposals | Surfaces technical debt that's costing you AI productivity |
+
+#### How It Works
+
+```
+Session 1: AI queries users.created_at → Error (column is "createdAt")
+           → Knowledge Capture prompts: "Document this convention?"
+           → User: "Yes, create skill"
+           → Creates project-specific skill documenting naming conventions
+
+Session 2: AI knows to use camelCase for this project
+           No more mistakes on column names
+
+Session 5: Refactor Radar detects: "Same entity called 'user', 'account', 'member'
+           across layers - this is causing repeated confusion"
+           → Offers to create issue with refactoring proposal
+           → Tech lead reviews and schedules cleanup sprint
+```
+
+#### The Compound Effect
+
+| Week | Without Panopticon | With Panopticon |
+|------|-------------------|-----------------|
+| 1 | AI makes 20 mistakes/day on conventions | AI makes 20 mistakes, captures 8 learnings |
+| 2 | AI makes 20 mistakes/day (no memory) | AI makes 12 mistakes, captures 5 more |
+| 4 | AI makes 20 mistakes/day (still no memory) | AI makes 3 mistakes, codebase improving |
+| 8 | Developers give up on AI for legacy code | AI is productive, tech debt proposals in backlog |
+
+#### For Technical Leaders
+
+**What gets measured gets managed.** Panopticon's Refactor Radar surfaces the specific patterns that are costing you AI productivity:
+
+- "Here are the 5 naming inconsistencies causing 40% of AI errors"
+- "These 3 missing FK constraints led to 12 incorrect deletions last month"
+- "Mixed async patterns in payments module caused 8 rollbacks"
+
+Each proposal includes:
+- **Evidence**: Specific file paths and examples
+- **Impact**: How this affects AI (and new developers)
+- **Migration path**: Incremental fix that won't break production
+
+#### For Executives
+
+**ROI is simple:**
+
+- $200K/year senior developer spends 2 hours/day correcting AI on legacy code
+- That's $50K/year in wasted productivity per developer
+- Team of 10 = **$500K/year** in AI friction
+
+Panopticon's learning system:
+- Captures corrections once, applies them forever
+- Identifies root causes (not just symptoms)
+- Creates actionable improvement proposals
+- Works across your entire AI toolchain (Claude, Codex, Cursor, Gemini)
+
+**This isn't "AI for greenfield only." This is AI that learns your business.**
+
+#### Configurable Per Team and Per Developer
+
+Different teams have different ownership boundaries. Individual developers have different preferences. Panopticon respects both:
+
+```markdown
+# In ~/.claude/CLAUDE.md (developer's personal config)
+
+## AI Suggestion Preferences
+
+### refactor-radar
+skip: database-migrations, infrastructure  # DBA/Platform team handles these
+welcome: naming, code-organization         # Always happy for these
+
+### knowledge-capture
+skip: authentication                       # Security team owns this
+```
+
+- **"Skip database migrations"** - Your DBA has a change management process
+- **"Skip infrastructure"** - Platform team owns that
+- **"Welcome naming fixes"** - Low risk, high value, always appreciated
+
+The AI adapts to your org structure, not the other way around.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -213,6 +322,7 @@ This allows multiple agents to work on different features simultaneously without
 | Start Planning | Codebase Exploration | Discovery Questions |
 |----------------|---------------------|---------------------|
 | ![Start](docs/planning-session-dialog.png) | ![Exploring](docs/planning-session-active.png) | ![Discovery](docs/planning-session-discovery.png) |
+| Click to create workspace and start AI planning | Claude explores the codebase, reads docs, understands patterns | Interactive questions to clarify requirements and approach |
 
 Planning artifacts are stored **inside the workspace**, making them part of the feature branch:
 
@@ -225,6 +335,13 @@ workspaces/feature-min-123/
 │   └── output-*.jsonl        # Backup of previous rounds
 └── ... (code)
 ```
+
+![Planning Session Output](docs/planning-session-output.png)
+
+When the planning session completes, the AI generates:
+- **STATE.md** - Current understanding, decisions made, and implementation plan
+- **Beads tasks** - Trackable sub-tasks with dependencies for the implementation
+- **Feature PRD** - Copied to `docs/prds/active/{issue}-plan.md` for documentation
 
 **This enables:**
 
@@ -363,6 +480,8 @@ Panopticon ships with 10+ high-value skills:
 | `incident-response` | Production incident handling |
 | `dependency-update` | Safe dependency updates |
 | `onboard-codebase` | Understanding new codebases |
+| `knowledge-capture` | AI self-monitoring: captures learnings when confused or corrected |
+| `refactor-radar` | AI self-monitoring: detects systemic issues causing AI confusion |
 
 ### Reserved Skill Names
 
@@ -372,7 +491,7 @@ Panopticon reserves the following skill names. **Do not use these names for proj
 `pan-down`, `pan-help`, `pan-install`, `pan-issue`, `pan-plan`, `pan-quickstart`, `pan-setup`, `pan-status`, `pan-up`
 
 **Workflow skills:**
-`beads`, `bug-fix`, `code-review`, `code-review-performance`, `code-review-security`, `dependency-update`, `feature-work`, `incident-response`, `onboard-codebase`, `refactor`, `release`, `session-health`, `skill-creator`, `web-design-guidelines`, `work-complete`
+`beads`, `bug-fix`, `code-review`, `code-review-performance`, `code-review-security`, `dependency-update`, `feature-work`, `incident-response`, `knowledge-capture`, `onboard-codebase`, `refactor`, `refactor-radar`, `release`, `session-health`, `skill-creator`, `web-design-guidelines`, `work-complete`
 
 **Recommendation:** Use a project-specific prefix for your skills (e.g., `myn-standards`, `acme-deployment`) to avoid namespace collisions.
 
