@@ -210,6 +210,10 @@ This allows multiple agents to work on different features simultaneously without
 
 #### Git-Backed Collaborative Planning
 
+| Start Planning | Codebase Exploration | Discovery Questions |
+|----------------|---------------------|---------------------|
+| ![Start](docs/planning-session-dialog.png) | ![Exploring](docs/planning-session-active.png) | ![Discovery](docs/planning-session-discovery.png) |
+
 Planning artifacts are stored **inside the workspace**, making them part of the feature branch:
 
 ```
@@ -320,6 +324,8 @@ pan work recover --all
 ```
 
 ## Dashboard
+
+![Panopticon Dashboard](docs/dashboard-overview.png)
 
 Start the monitoring dashboard:
 
