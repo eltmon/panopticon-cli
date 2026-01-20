@@ -1,106 +1,73 @@
-# Panopticon Development Guide
+# Workspace: feature-pan-17
 
-Project-specific instructions for AI assistants working on Panopticon.
+**Issue:** PAN-17
+**Branch:** feature/pan-17
+**Path:** /home/eltmon/projects/panopticon/workspaces/feature-pan-17
 
-## Project Overview
+## URLs (if workspace has Docker)
 
-Panopticon is a multi-agent orchestration framework for AI coding assistants. It provides:
-- Universal skills synced across Claude Code, Codex, Cursor, Gemini CLI
-- Agent spawning and health monitoring via tmux
-- Dashboard for issue tracking and agent management
-- GUPP hooks for self-propelling agents
+| Service | URL |
+|---------|-----|
+| Frontend | https://feature-pan-17.localhost:3000 |
+| API | https://api-feature-pan-17.localhost:8080 |
 
-## Key Directories
 
-| Directory | Purpose |
-|-----------|---------|
-| `src/cli/` | CLI commands (`pan work`, `pan sync`, etc.) |
-| `src/dashboard/frontend/` | React dashboard (port 3010) |
-| `src/dashboard/server/` | Express API server (port 3011) |
-| `~/.panopticon/skills/` | Skills distributed with Panopticon |
-| `~/.panopticon/agents/` | Per-agent state and health |
+---
 
-## Skills Management
+## Task Tracking (Beads)
 
-**IMPORTANT:** The repo `skills/` directory is the source of truth for Panopticon-bundled skills.
-
-**Distribution flow:**
-```
-repo/skills/           ← SOURCE OF TRUTH (commit here)
-       ↓ pan init / npm postinstall
-~/.panopticon/skills/  ← Runtime copy on user's machine
-       ↓ pan sync
-~/.claude/skills/      ← Symlinked for AI tools
-```
-
-**When creating/updating skills for Panopticon:**
-1. Create/edit in `skills/{name}/SKILL.md` (in your feature branch)
-2. Commit to your feature branch
-3. Test by copying to `~/.panopticon/skills/` and running `pan sync`
-4. PR/review, merge to main
-5. Skills ship with next `npm publish`
-
-**DO NOT** create skills directly in `~/.panopticon/skills/` - that's the runtime copy, not the source.
-
-**Skill types:**
-| Type | Location | Example |
-|------|----------|---------|
-| Panopticon-bundled | `repo/skills/` | `pan-help`, `beads`, `feature-work` |
-| Project-specific | `{project}/.claude/skills/` | `myn-standards` |
-| User personal | `~/.claude/skills/` | Experimental, private |
-
-**Current Panopticon skills (in repo):**
-- `pan-*` - Panopticon operation guides (help, install, setup, up, down, etc.)
-- `beads` - Git-backed issue tracking
-- `feature-work`, `bug-fix`, `refactor` - Development workflows
-- `code-review`, `code-review-security`, `code-review-performance` - Review checklists
-- `release`, `dependency-update`, `incident-response` - Operations
-
-## Dashboard Development
+Use beads for persistent task tracking that survives compaction.
 
 ```bash
-# Start in dev mode (hot reload)
-cd src/dashboard && npm run dev
-# Frontend: http://localhost:3010
-# API: http://localhost:3011
-
-# Rebuild backend after changes
-cd src/dashboard/server && npm run build
+bd ready              # Find unblocked work
+bd show <id>          # Get full context
+bd update <id> --status in_progress  # Start work
+bd comments add <id> "note"  # Add progress (CRITICAL)
+bd close <id> --reason "..."  # Complete
+bd sync               # Persist to git
 ```
 
-## CLI Development
+**ALWAYS** add comments as you work - they survive context compaction.
+
+### Creating Sub-Tasks
 
 ```bash
-# Build CLI
-npm run build
-
-# Test commands
-node dist/cli/index.js doctor
-node dist/cli/index.js skills
+bd create --title "Implement feature X" --parent <parent-id>
 ```
 
-## Issue Tracking
+### Blocking Issues
 
-**Panopticon uses GitHub Issues only** - not Linear.
+```bash
+bd update <id> --blocked-by <blocker-id>
+bd ready  # Will exclude blocked issues
+```
 
-- Issues: https://github.com/eltmon/panopticon-cli/issues
-- PRs: https://github.com/eltmon/panopticon-cli/pulls
 
-When working on issues, use `gh issue view` and `gh issue create` commands.
+---
 
-## Beads vs GitHub Issues
+## Available Commands
 
-**IMPORTANT:** When Ed says "beads", he means the `bd` CLI tool for local git-backed issue tracking - NOT GitHub issues.
+| Command | Description |
+|---------|-------------|
+| `/work-status` | Show all running agents |
+| `/work-tell <id> <msg>` | Message an agent |
+| `/work-approve <id>` | Approve and merge work |
+| `pan workspace list` | List all workspaces |
+| `pan skills` | List available skills |
 
-- **Beads (`bd`)**: Local task tracking with dependencies, used for detailed sub-tasks
-- **GitHub Issues**: High-level feature requests and bugs
+## Skills
 
-Create beads with: `bd create --title "Task title" --type task`
-List beads with: `bd list`
+Skills are in `~/.panopticon/skills/`. They provide reusable workflows and best practices.
 
-## Testing Changes
+To use a skill, invoke it with `/skill-name` or reference it in your prompt.
 
-No automated tests yet. Manual testing:
-1. `pan doctor` - Health check
-2. `pan sync --dry-run` - Skill sync preview
-3. Dashboard - Test UI changes at localhost:3010
+
+---
+
+## Warnings
+
+- **DO NOT** modify files outside this workspace without explicit permission
+- **DO NOT** push to main/master branch directly
+- **ALWAYS** run tests before marking work complete
+- **ALWAYS** add beads comments for long-running tasks
+- **ALWAYS** check for existing patterns before introducing new ones
