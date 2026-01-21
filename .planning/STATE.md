@@ -1,190 +1,138 @@
-# PAN-17: XTerminal Performance Issues
+# PAN-1: Add Rally Support as Secondary Tracker
 
 ## Problem Statement
 
-The web terminal component experiences intermittent keystroke lag - keystrokes are delayed or don't register, with a pattern of working for 1-2 seconds then hanging for 1-2 seconds.
-
-## Root Cause Analysis
-
-### Primary Cause: Blocking `execSync` calls
-
-The server uses synchronous `execSync` for tmux/git operations. Combined with aggressive dashboard polling (1-5 second intervals), the Node.js event loop is blocked multiple times per second, causing WebSocket messages (including keystrokes) to queue up.
-
-**Key blocking operations:**
-| Location | Operation | Frequency |
-|----------|-----------|-----------|
-| Line 4101 | `tmux list-sessions` on WS connect | Each terminal open |
-| Line 4155 | `tmux resize-window` on resize | Many times/second during resize |
-| Line 1026 | `tmux list-sessions` in `/api/agents` | Polled every 3s |
-| Line 1086 | `tmux capture-pane` in `/api/agents/:id/output` | Polled every 1s |
-
-### Secondary Cause: No resize debouncing
-
-Frontend `ResizeObserver` triggers resize messages at potentially 60fps during UI movement. Each resize message causes a blocking `execSync` on the server.
-
-**Chain of events:**
-1. Container size changes (even slightly)
-2. ResizeObserver fires immediately (no debounce)
-3. `fit()` called → `term.onResize` fires
-4. WebSocket sends resize JSON message
-5. Server receives → **blocks on execSync for tmux resize**
-6. All other WebSocket messages (keystrokes) queue up
-7. Repeat
+Panopticon currently supports Linear (primary) and GitHub Issues (secondary). Enterprise teams using Rally need similar integration to leverage Panopticon's multi-agent orchestration capabilities.
 
 ## Decisions Made
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Scope | Claude Code prompts only | Other TUI apps can use `tmux attach` workaround |
-| Recovery behavior | Auto-reconnect gracefully | Better UX than manual reconnect |
-| Observability | Add metrics to `/api/health` | Simple, single endpoint |
-| Out of scope | Auth, major UI changes, multi-terminal | Keep focused |
+| **Scope** | Full CRUD | Support create/read/update/delete to match Linear/GitHub parity |
+| **Target users** | Both enterprise and individual | Start simple, design for enterprise extensibility |
+| **Work item types** | All (User Stories, Defects, Tasks, Features) | Comprehensive coverage for different workflows |
+| **Hierarchy handling** | Flatten all | Treat as flat issues with `parent_id` field. Matches Linear/GitHub model |
+| **State mapping** | Standard 3-state | Defined→open, In-Progress→in_progress, Completed/Accepted→closed |
+| **API client** | rally-node SDK | npm package 'rally' - handles auth/pagination, reduce boilerplate |
+| **Out of scope v1** | Webhooks + Attachments | Keep v1 simple, add real-time updates later |
 
-## Solution Architecture
+## State Mapping
 
-### 1. Convert Terminal-Critical Operations to Async
+| Rally State | Panopticon State |
+|-------------|------------------|
+| Defined | open |
+| In-Progress | in_progress |
+| Completed | closed |
+| Accepted | closed |
 
-Replace `execSync` with async `exec` (promisified) for operations that affect terminal responsiveness.
+## Architecture
 
-**Priority 1 (Terminal path - MUST fix):**
-```typescript
-// Before (blocking):
-execSync(`tmux resize-window -t ${sessionName} -x ${cols} -y ${rows}`)
+### Files to Create
 
-// After (non-blocking):
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
+| File | Purpose |
+|------|---------|
+| `src/lib/tracker/rally.ts` | Rally adapter implementing `IssueTracker` interface |
+| `tests/lib/tracker/rally.test.ts` | Unit tests with mocked Rally API |
 
-await execAsync(`tmux resize-window -t ${sessionName} -x ${cols} -y ${rows}`)
-```
-
-Files:
-- Line 4101: `tmux list-sessions` on WebSocket connection
-- Line 4155: `tmux resize-window` on resize messages
-
-**Priority 2 (Polling paths - SHOULD fix):**
-- Line 1026: `/api/agents` endpoint
-- Line 1086: `/api/agents/:id/output` endpoint
-
-### 2. Debounce Resize Messages
-
-Add 200ms debounce to resize handling on frontend.
-
-**Frontend (`XTerminal.tsx`):**
-```typescript
-// Add debounce utility
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number) {
-  let timer: ReturnType<typeof setTimeout>;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), ms);
-  };
-}
-
-// Debounce ResizeObserver callback
-const debouncedFit = debounce(() => {
-  if (wsRef.current?.readyState === WebSocket.OPEN) {
-    fitAddon.current?.fit();
-  }
-}, 200);
-
-const resizeObserver = new ResizeObserver(debouncedFit);
-```
-
-### 3. Add Connection Metrics
-
-Extend `/api/health` endpoint:
-
-```typescript
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    connections: {
-      websockets: wss.clients.size,
-      activePtys: activePtys.size
-    }
-  });
-});
-```
-
-### 4. Auto-Reconnect Logic
-
-**Frontend changes:**
-- Detect disconnect (WebSocket close/error events)
-- Show "Reconnecting..." indicator in terminal
-- Exponential backoff retry: 1s → 2s → 4s → 8s → max 30s
-- Clear indicator and restore session on successful reconnect
-- After 5 failed attempts, show "Connection lost. Click to reconnect." with manual button
-
-## Files to Modify
+### Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/dashboard/server/index.ts` | Convert execSync to async for terminal ops, add connection metrics |
-| `src/dashboard/frontend/src/components/XTerminal.tsx` | Add resize debouncing, auto-reconnect logic |
+| `src/lib/tracker/interface.ts` | Add `'rally'` to `TrackerType` union |
+| `src/lib/tracker/factory.ts` | Add `case 'rally'` handler, `RallyConfig` interface |
+| `src/lib/config.ts` | Add `RallyConfig` interface, `rally?: RallyConfig` to `TrackersConfig` |
+| `src/cli/commands/work/list.ts` | Add Rally to `getConfiguredTrackers()` and `getTrackerConfig()` |
+| `src/dashboard/server/index.ts` | Add `fetchRallyIssues()` function, Rally config extraction |
+| `src/dashboard/frontend/src/types.ts` | Add `'rally'` to `IssueSource` type |
+| `skills/pan-tracker/SKILL.md` | Add Rally configuration documentation |
+
+### Dependencies
+
+```
+rally  (npm package)
+```
+
+### Configuration Schema
+
+```toml
+[trackers.rally]
+type = "rally"
+api_key_env = "RALLY_API_KEY"   # Default: RALLY_API_KEY
+server = "rally1.rallydev.com"  # Optional, defaults to rally1.rallydev.com
+workspace = "/workspace/12345"  # Rally workspace OID
+project = "/project/67890"      # Rally project OID (optional, filters to project)
+```
+
+### Interface Implementation
+
+```typescript
+// src/lib/tracker/rally.ts
+export class RallyTracker implements IssueTracker {
+  // Map Rally artifact types to unified Issue type
+  // User Story, Defect, Task, Feature all become Issue
+
+  async listIssues(filters?: IssueFilters): Promise<Issue[]>
+  async getIssue(id: string): Promise<Issue>
+  async createIssue(issue: NewIssue): Promise<Issue>
+  async updateIssue(id: string, update: IssueUpdate): Promise<Issue>
+  async addComment(issueId: string, comment: string): Promise<Comment>
+  async getComments(issueId: string): Promise<Comment[]>
+}
+```
+
+### Rally-Specific Considerations
+
+1. **Reference format**: Rally uses FormattedID (e.g., `US123`, `DE456`, `TA789`, `F012`)
+2. **Work item types**: Map to `artifactType` field in normalized Issue
+3. **Parent references**: Rally's `Parent` field maps to `parent_id`
+4. **Priority**: Rally uses strings ("High", "Normal", "Low") - map to numbers
+5. **API pagination**: Rally SDK handles this automatically
 
 ## Implementation Order
 
-1. **Debounce resize messages** (quick win, low risk, ~30 min)
-2. **Convert terminal-path execSync to async** (main fix, ~1 hour)
-3. **Add connection metrics to health** (observability, ~15 min)
-4. **Add auto-reconnect** (polish, ~1 hour)
+1. **Core adapter** - Rally tracker implementing IssueTracker interface
+2. **Factory integration** - Wire into createTracker factory
+3. **Config support** - Add Rally config to TOML schema
+4. **CLI integration** - Rally issues in `pan work list`
+5. **Dashboard integration** - Rally issues in Kanban board
+6. **Documentation** - Add to pan-tracker skill
+7. **Tests** - Unit tests with mocked Rally API
 
 ## Testing Strategy
 
-1. **Manual keystroke test**: Type continuously while moving/resizing panels
-2. **Resize stress test**: Rapidly resize terminal while typing
-3. **Reconnect test**: Stop/start backend while terminal is open
-4. **Health endpoint test**: Verify `/api/health` shows connection counts
+1. **Unit tests** (`tests/lib/tracker/rally.test.ts`)
+   - Mock Rally SDK responses
+   - Test state mapping
+   - Test artifact type handling
+   - Test error handling (auth, not found)
+
+2. **Integration test** (manual)
+   - Configure Rally in `~/.panopticon/config.toml`
+   - Run `pan work list` and verify Rally issues appear
+   - Test `pan work issue` spawns agent for Rally item
+   - Verify dashboard shows Rally issues
 
 ## Risks and Mitigations
 
 | Risk | Mitigation |
 |------|------------|
-| Async conversion breaks error handling | Keep try/catch structure, test thoroughly |
-| Debounce makes resize feel sluggish | Use 200ms which is imperceptible for most users |
-| Auto-reconnect loops on persistent failure | Cap retries at 5, then show manual reconnect |
-
-## Current Status
-
-**Implementation: COMPLETE** ✓
-
-All four tasks have been implemented:
-
-1. ✅ **Debounce resize messages** (panopticon-20i)
-   - Added debounce utility function
-   - Applied 200ms debounce to ResizeObserver callback
-   - Applied 200ms debounce to window resize handler
-
-2. ✅ **Convert terminal-path execSync to async** (panopticon-1sj)
-   - Converted WebSocket connection tmux list-sessions (line 4106)
-   - Converted resize handler tmux resize-window (line 4158)
-   - Converted /api/agents endpoint (line 1030)
-   - Converted /api/agents/:id/output endpoint (line 1088)
-   - All terminal-critical and polling operations now non-blocking
-
-3. ✅ **Add connection metrics to /api/health** (panopticon-r3f)
-   - Extended /api/health endpoint with websockets count and activePtys count
-   - Moved endpoint definition to after wss and activePtys are created
-
-4. ✅ **Add auto-reconnect logic** (panopticon-l9w)
-   - Implemented exponential backoff: 1s → 2s → 4s → 8s → max 30s
-   - Shows "Reconnecting in Xs..." messages with attempt count
-   - Reuses terminal instance during reconnection to preserve screen state
-   - Caps at 5 attempts, then shows "Connection lost" message
-   - Resets attempt counter on successful reconnection
-
-**Next Steps:**
-- Manual testing of terminal performance
-- Verify no regressions in normal terminal usage
-- Test reconnection scenarios (backend restart, network interruption)
+| rally-node SDK may be stale/unmaintained | Check npm stats, have fallback plan for raw REST |
+| Enterprise Rally may have custom fields | Start with standard fields, add custom field support later |
+| Rate limiting | Rally SDK likely handles this; add retry logic if needed |
+| SSO/OAuth complexity | v1 uses API key only; document SSO workaround |
 
 ## Out of Scope (Explicitly)
 
-- Converting ALL execSync calls (too risky for this issue, do incrementally)
-- Authentication/security changes
-- Major UI changes
-- Multiple simultaneous terminal support
-- Fixing other TUI apps (vim, less, etc.) - they can use `tmux attach`
+- **Webhooks**: Rally's webhook system is complex; v1 is poll-based
+- **Attachments**: File sync between trackers deferred to future issue
+- **Custom fields**: Enterprise Rally often has custom fields; v1 uses standard fields only
+- **SSO/OAuth**: API key auth only for v1
+- **Rally Lookback API**: Historical/trend data not needed for v1
+
+## Success Criteria
+
+1. `pan work list` shows Rally issues alongside Linear/GitHub
+2. `pan work issue RALLY-123` creates workspace and spawns agent
+3. Rally issues appear in dashboard Kanban board with correct states
+4. Documentation in pan-tracker skill covers Rally setup
+5. Unit tests pass with mocked Rally API responses
