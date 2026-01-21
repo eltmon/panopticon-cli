@@ -1,253 +1,362 @@
-# PAN-17: XTerminal Performance Issues
+# PAN-3: Comprehensive Agent Skills Suite - STATE
 
-## Problem Statement
+## Issue Summary
+Create a full suite of `pan-*` skills that guide AI assistants through Panopticon operations. Skills should enable conversational guidance so users never need to learn CLI commands directly.
 
-The web terminal component experiences intermittent keystroke lag - keystrokes are delayed or don't register, with a pattern of working for 1-2 seconds then hanging for 1-2 seconds.
+## Key Decisions
 
-## Root Cause Analysis
+### 1. Skill Purpose
+**Decision:** Skills are guidance wrappers + documentation.
 
-### Primary Cause: Blocking `execSync` calls
+Skills help AI assistants:
+- Understand when to invoke which `pan` CLI commands
+- Guide users through configuration decisions
+- Provide context about how Panopticon components work together
+- Offer troubleshooting guidance
 
-The server uses synchronous `execSync` for tmux/git operations. Combined with aggressive dashboard polling (1-5 second intervals), the Node.js event loop is blocked multiple times per second, causing WebSocket messages (including keystrokes) to queue up.
+### 2. Naming Convention
+**Decision:** Use `pan-*` (dashes) for directory names.
 
-**Key blocking operations:**
-| Location | Operation | Frequency |
-|----------|-----------|-----------|
-| Line 4101 | `tmux list-sessions` on WS connect | Each terminal open |
-| Line 4155 | `tmux resize-window` on resize | Many times/second during resize |
-| Line 1026 | `tmux list-sessions` in `/api/agents` | Polled every 3s |
-| Line 1086 | `tmux capture-pane` in `/api/agents/:id/output` | Polled every 1s |
+- Directory: `~/.panopticon/skills/pan-help/`
+- Skill name in SKILL.md: Can use `pan:help` or `pan-help` (both work for invocation)
+- Matches existing skills: `bug-fix`, `feature-work`, `code-review-*`
 
-### Secondary Cause: No resize debouncing
+### 3. Skill Location & Distribution
+**Decision:** Repo is source of truth, runtime is a copy.
 
-Frontend `ResizeObserver` triggers resize messages at potentially 60fps during UI movement. Each resize message causes a blocking `execSync` on the server.
-
-**Chain of events:**
-1. Container size changes (even slightly)
-2. ResizeObserver fires immediately (no debounce)
-3. `fit()` called → `term.onResize` fires
-4. WebSocket sends resize JSON message
-5. Server receives → **blocks on execSync for tmux resize**
-6. All other WebSocket messages (keystrokes) queue up
-7. Repeat
-
-## Decisions Made
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Scope | Claude Code prompts only | Other TUI apps can use `tmux attach` workaround |
-| Recovery behavior | Auto-reconnect gracefully | Better UX than manual reconnect |
-| Observability | Add metrics to `/api/health` | Simple, single endpoint |
-| Out of scope | Auth, major UI changes, multi-terminal | Keep focused |
-
-## Solution Architecture
-
-### 1. Convert Terminal-Critical Operations to Async
-
-Replace `execSync` with async `exec` (promisified) for operations that affect terminal responsiveness.
-
-**Priority 1 (Terminal path - MUST fix):**
-```typescript
-// Before (blocking):
-execSync(`tmux resize-window -t ${sessionName} -x ${cols} -y ${rows}`)
-
-// After (non-blocking):
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
-
-await execAsync(`tmux resize-window -t ${sessionName} -x ${cols} -y ${rows}`)
+**Distribution flow:**
+```
+repo/skills/pan-*/           ← SOURCE OF TRUTH (version controlled)
+       ↓ pan init / npm postinstall
+~/.panopticon/skills/pan-*/  ← Runtime copy (user's machine)
+       ↓ pan sync
+~/.claude/skills/pan-*/      ← Symlinked for AI tools
 ```
 
-Files:
-- Line 4101: `tmux list-sessions` on WebSocket connection
-- Line 4155: `tmux resize-window` on resize messages
+**Workflow for creating/updating skills (for agents working on PAN-3):**
+1. Create/edit skill in feature branch: `skills/{name}/SKILL.md`
+2. Commit to feature branch (`feature/pan-3`)
+3. Test locally by copying to `~/.panopticon/skills/` and running `pan sync`
+4. When done with phase, PR/review
+5. Merge to main
+6. On release: `npm publish` includes skills in package
+7. Users run `pan init` or update → skills copied to `~/.panopticon/skills/`
 
-**Priority 2 (Polling paths - SHOULD fix):**
-- Line 1026: `/api/agents` endpoint
-- Line 1086: `/api/agents/:id/output` endpoint
+**Current workspace path:** `/home/eltmon/projects/panopticon/workspaces/feature-pan-3/`
+**Skills directory:** `./skills/` (relative to workspace root)
 
-### 2. Debounce Resize Messages
+**Note:** Phase 1 skills already exist in both:
+- `~/.panopticon/skills/pan-*/` (working now via `pan sync`)
+- `./skills/pan-*/` (committed to repo)
 
-Add 200ms debounce to resize handling on frontend.
+**Project-specific skills** (not Panopticon generic):
+- Live in `{project}/.claude/skills/` (git-tracked in the project)
+- These are NOT managed by Panopticon
+- `pan sync` adds Panopticon skills alongside, never replaces project skills
+- "Git-tracked always wins" - project skills take precedence
 
-**Frontend (`XTerminal.tsx`):**
-```typescript
-// Add debounce utility
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number) {
-  let timer: ReturnType<typeof setTimeout>;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), ms);
-  };
-}
+### 4. Docker Templates
+**Decision:** Create app-type templates in `templates/docker/`
 
-// Debounce ResizeObserver callback
-const debouncedFit = debounce(() => {
-  if (wsRef.current?.readyState === WebSocket.OPEN) {
-    fitAddon.current?.fit();
-  }
-}, 200);
+Templates needed:
+- `spring-boot/` - Java/Spring with Maven, Postgres, Redis
+- `react-vite/` - React with Vite hot-reload
+- `nextjs/` - Next.js with app router
+- `dotnet/` - .NET Core with SQL Server
+- `python-fastapi/` - FastAPI with uvicorn
+- `monorepo/` - Frontend + backend combo
 
-const resizeObserver = new ResizeObserver(debouncedFit);
+Each template includes:
+- `Dockerfile.dev` - Development Dockerfile
+- `docker-compose.yml` - Service orchestration
+- `README.md` - Usage instructions
+
+### 5. Traefik/Networking
+**Decision:** Traefik infrastructure already exists (PAN-4).
+
+Skills (`pan-network`, `pan-docker`) will guide users through:
+- Using existing Traefik setup
+- Configuring workspace routing
+- Platform-specific DNS setup (Linux, macOS, WSL2)
+
+No new infrastructure needed - just guidance skills.
+
+## Scope
+
+### In Scope
+
+**Skills to create (organized by priority):**
+
+| Priority | Skill | Purpose |
+|----------|-------|---------|
+| P0 | `pan-help` | Entry point - overview of all commands and skills |
+| P0 | `pan-install` | Guide through npm install, dependencies, env setup |
+| P0 | `pan-setup` | First-time configuration wizard |
+| P0 | `pan-quickstart` | Combined: install → setup → first workspace |
+| P0 | `pan-up` | Start dashboard, API, Traefik |
+| P0 | `pan-down` | Graceful shutdown of all services |
+| P0 | `pan-status` | Check running agents, workspaces, health |
+| P0 | `pan-plan` | Planning workflow with AI discovery |
+| P0 | `pan-issue` | Create workspace + spawn agent |
+| P1 | `pan-config` | View/edit Panopticon configuration |
+| P1 | `pan-tracker` | Configure issue tracker (Linear/GitHub/GitLab) |
+| P1 | `pan-projects` | Add/remove managed projects |
+| P1 | `pan-docker` | Docker template selection and configuration |
+| P1 | `pan-network` | Traefik, local domains, platform-specific setup |
+| P1 | `pan-sync` | Sync skills to Claude Code |
+| P1 | `pan-approve` | Review + approve agent work, merge MR |
+| P1 | `pan-tell` | Send message to running agent |
+| P1 | `pan-kill` | Stop a running agent |
+| P1 | `pan-health` | System health check |
+| P1 | `pan-diagnose` | Interactive troubleshooting |
+| P2 | `pan-logs` | View logs from agents, dashboard, API |
+| P2 | `pan-rescue` | Recover stuck agents, clean orphaned workspaces |
+
+**Docker templates to create:**
+- `templates/docker/spring-boot/`
+- `templates/docker/react-vite/`
+- `templates/docker/nextjs/`
+- `templates/docker/dotnet/`
+- `templates/docker/python-fastapi/`
+- `templates/docker/monorepo/`
+
+### Out of Scope
+
+- New CLI commands (existing commands are sufficient)
+- New infrastructure (Traefik already set up)
+- State mapping configuration (`pan-states` deferred - complex topic)
+- Skill creation guidance (`skill-creator` already exists)
+
+## Architecture
+
+### Skill Structure
+
+Each skill follows this structure:
+```
+pan-{name}/
+├── SKILL.md          # Main guidance content with YAML frontmatter
+├── templates/        # (optional) Config templates, checklists
+└── resources/        # (optional) Reference docs, examples
 ```
 
-### 3. Add Connection Metrics
-
-Extend `/api/health` endpoint:
-
-```typescript
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    connections: {
-      websockets: wss.clients.size,
-      activePtys: activePtys.size
-    }
-  });
-});
+### Skill YAML Frontmatter
+```yaml
+---
+name: pan-help
+description: Overview of all Panopticon commands and capabilities
+triggers:
+  - pan help
+  - panopticon help
+  - what can panopticon do
+allowed-tools:
+  - Bash
+  - Read
+---
 ```
 
-### 4. Auto-Reconnect Logic
+### Skill Content Pattern
 
-**Frontend changes:**
-- Detect disconnect (WebSocket close/error events)
-- Show "Reconnecting..." indicator in terminal
-- Exponential backoff retry: 1s → 2s → 4s → 8s → max 30s
-- Clear indicator and restore session on successful reconnect
-- After 5 failed attempts, show "Connection lost. Click to reconnect." with manual button
-
-## Files to Modify
-
-| File | Changes |
-|------|---------|
-| `src/dashboard/server/index.ts` | Convert execSync to async for terminal ops, add connection metrics |
-| `src/dashboard/frontend/src/components/XTerminal.tsx` | Add resize debouncing, auto-reconnect logic |
+Skills should include:
+1. **Overview** - What this skill helps with
+2. **When to use** - Trigger conditions
+3. **Workflow** - Step-by-step guidance
+4. **CLI commands** - Which `pan` commands to run
+5. **Troubleshooting** - Common issues and fixes
 
 ## Implementation Order
 
-1. **Debounce resize messages** (quick win, low risk, ~30 min)
-2. **Convert terminal-path execSync to async** (main fix, ~1 hour)
-3. **Add connection metrics to health** (observability, ~15 min)
-4. **Add auto-reconnect** (polish, ~1 hour)
+### Phase 1: Core Onboarding (P0)
+1. `pan-help` - Entry point, no dependencies
+2. `pan-install` - Installation guidance
+3. `pan-setup` - Configuration wizard
+4. `pan-quickstart` - Combines install + setup
+5. `pan-up` / `pan-down` - Service lifecycle
+6. `pan-status` - Health overview
+7. `pan-plan` - Planning workflow
+8. `pan-issue` - Workspace + agent creation
 
-## Testing Strategy
+### Phase 2: Configuration (P1)
+9. `pan-config` - Config management
+10. `pan-tracker` - Tracker setup
+11. `pan-projects` - Project management
+12. `pan-sync` - Skills sync
 
-1. **Manual keystroke test**: Type continuously while moving/resizing panels
-2. **Resize stress test**: Rapidly resize terminal while typing
-3. **Reconnect test**: Stop/start backend while terminal is open
-4. **Health endpoint test**: Verify `/api/health` shows connection counts
+### Phase 3: Docker & Networking (P1)
+13. Docker templates (all 6)
+14. `pan-docker` - Template selection
+15. `pan-network` - Networking guidance
 
-## Risks and Mitigations
+### Phase 4: Operations (P1)
+16. `pan-approve` - Work approval
+17. `pan-tell` / `pan-kill` - Agent management
+18. `pan-health` / `pan-diagnose` - Health & troubleshooting
 
-| Risk | Mitigation |
-|------|------------|
-| Async conversion breaks error handling | Keep try/catch structure, test thoroughly |
-| Debounce makes resize feel sluggish | Use 200ms which is imperceptible for most users |
-| Auto-reconnect loops on persistent failure | Cap retries at 5, then show manual reconnect |
+### Phase 5: Advanced (P2)
+19. `pan-logs` - Log viewing
+20. `pan-rescue` - Recovery operations
+
+## Critical Dependencies
+
+```
+pan-help (no deps - start here)
+    │
+    ├──► pan-install ──► pan-setup ──► pan-quickstart
+    │
+    ├──► pan-up/pan-down ──► pan-status
+    │
+    └──► pan-plan ──► pan-issue
+                         │
+                         ├──► pan-approve
+                         ├──► pan-tell
+                         └──► pan-kill
+
+Docker templates (can be parallel)
+    │
+    └──► pan-docker ──► pan-network
+
+pan-config (no deps)
+    │
+    ├──► pan-tracker
+    ├──► pan-projects
+    └──► pan-sync
+
+pan-health (no deps)
+    │
+    └──► pan-diagnose ──► pan-rescue
+```
 
 ## Current Status
 
-**Implementation: COMPLETE** ✓
+### ✅ ALL SKILLS COMPLETED AND VERIFIED (2026-01-20)
 
-All four tasks have been implemented:
+**Status:** All Phase 1-5 skills have been created, synced, and verified.
 
-1. ✅ **Debounce resize messages** (panopticon-20i)
-   - Added debounce utility function
-   - Applied 200ms debounce to ResizeObserver callback
-   - Applied 200ms debounce to window resize handler
+### Skills Audit
 
-2. ✅ **Convert terminal-path execSync to async** (panopticon-1sj)
-   - Converted WebSocket connection tmux list-sessions (line 4106)
-   - Converted resize handler tmux resize-window (line 4158)
-   - Converted /api/agents endpoint (line 1030)
-   - Converted /api/agents/:id/output endpoint (line 1088)
-   - All terminal-critical and polling operations now non-blocking
+| Phase | Skills | Repo | Synced | Verified |
+|-------|--------|------|--------|----------|
+| 1 (P0) | pan-help, install, setup, quickstart, up, down, status, plan, issue | ✅ | ✅ | ✅ |
+| 2 (P1) | pan-config, tracker, projects, sync | ✅ | ✅ | ✅ |
+| 3 (P1) | Docker templates (6) + pan-docker, pan-network | ✅ | ✅ | ✅ |
+| 4 (P1) | pan-approve, tell, kill, health, diagnose | ✅ | ✅ | ✅ |
+| 5 (P2) | pan-logs, pan-rescue | ✅ | ✅ | ✅ |
+| Bonus | pan-code-review, pan-convoy-synthesis | ✅ | ✅ | ✅ |
 
-3. ✅ **Add connection metrics to /api/health** (panopticon-r3f)
-   - Extended /api/health endpoint with websockets count and activePtys count
-   - Moved endpoint definition to after wss and activePtys are created
+### Completion Summary (2026-01-20)
 
-4. ✅ **Add auto-reconnect logic** (panopticon-l9w)
-   - Implemented exponential backoff: 1s → 2s → 4s → 8s → max 30s
-   - Shows "Reconnecting in Xs..." messages with attempt count
-   - Reuses terminal instance during reconnection to preserve screen state
-   - Caps at 5 attempts, then shows "Connection lost" message
-   - Resets attempt counter on successful reconnection
+**All tasks completed:**
+1. ✅ Copied Phase 2-5 skills from repo to `~/.panopticon/skills/`
+2. ✅ Synced all skills to `~/.claude/skills/` via `pan sync` (45 items)
+3. ✅ Verified Phase 1 skills: All 9 skills have proper YAML frontmatter and content
+4. ✅ Verified Phase 2 skills: pan-config, tracker, projects, sync
+5. ✅ Verified Phase 3 skills: All 6 Docker templates + pan-docker, pan-network
+6. ✅ Verified Phase 4 skills: pan-approve, tell, kill, health, diagnose
+7. ✅ Verified Phase 5 skills: pan-logs, pan-rescue
+8. ✅ Verified bonus skills: pan-code-review, pan-convoy-synthesis
 
-**Additional Improvements (January 20, 2026):**
+### Verification Details
 
-5. ✅ **Enhanced xterm.js configuration**
-   - Added `scrollback: 10000` for larger history buffer
-   - Added `convertEol: true` for proper line ending handling
-   - Added `scrollOnUserInput: true` for auto-scroll on typing
-   - Added `cursorStyle: 'block'` for better TUI visibility
-   - Added `allowProposedApi: true` for better compatibility
+**Skills structure verified:**
+- ✅ All skills have proper YAML frontmatter (name, description, triggers, allowed-tools)
+- ✅ All skills have comprehensive content with proper sections
+- ✅ All Docker templates include Dockerfile.dev, docker-compose.yml, README.md
+- ✅ All skills synced to both `~/.panopticon/skills/` and `~/.claude/skills/`
 
-6. ✅ **Fixed scroll-to-bottom behavior**
-   - Terminal now auto-scrolls to bottom when new content arrives
-   - Added `term.scrollToBottom()` in message handler
+**Total skills available:**
+- 25 pan-* skills (Phase 1-5 + bonus)
+- 6 Docker templates (spring-boot, react-vite, nextjs, dotnet, python-fastapi, monorepo)
+- Plus existing skills (beads, bug-fix, code-review-*, feature-work, etc.)
 
-7. ✅ **Fixed dimension synchronization**
-   - Backend PTY now starts with 120x30 (matching frontend)
-   - Pre-resizes tmux window on connection
-   - Resize order fixed: tmux first, then PTY (ensures SIGWINCH propagates correctly)
+### Remaining Work
 
-8. ✅ **Improved focus handling**
-   - Auto-focus terminal on mount
-   - Click-to-focus for better UX
-   - Added tabIndex for keyboard accessibility
+**All core work complete.** Ready for:
+1. Testing skills in real usage scenarios
+2. Gathering user feedback
+3. Documentation updates (if needed)
+4. PR creation and merge to main
 
-## Claude Code AskUserQuestion Bug (EXTERNAL ISSUE - CONFIRMED)
+## Completed During Planning
 
-**Issue Discovered:** Claude Code's `AskUserQuestion` tool does NOT render question options when using the `--dangerously-skip-permissions` flag.
+| Task | Status | Reference |
+|------|--------|-----------|
+| Fix planning prompt template to include PRD instruction | ✅ Done | [GitHub #7](https://github.com/eltmon/panopticon-cli/issues/7) |
+| Create Phase 1 skills (9 skills) | ✅ Done | Commit `073b520` |
 
-**Symptoms:**
-- The heading text appears ("A few more questions to nail down the details:")
-- But the actual multi-select question options are invisible
-- The tool immediately returns empty results without waiting for user input
-- Claude Code continues as if questions were answered (with empty/null answers)
+**Fix details:** Updated `src/dashboard/server/index.ts` to include PRD creation instruction in both the main planning prompt and continuation prompt templates.
 
-**Root Cause:** This is a **documented bug in Claude Code** related to the `--dangerously-skip-permissions` flag:
+## Open Questions
 
-| GitHub Issue | Description | Status |
-|--------------|-------------|--------|
-| [#10400](https://github.com/anthropics/claude-code/issues/10400) | AskUserQuestion returns empty response when bypass permissions enabled | Fixed in 2.0.67 |
-| [#10229](https://github.com/anthropics/claude-code/issues/10229) | AskUserQuestion tool returns empty results without displaying prompts | Closed |
-| [#10267](https://github.com/anthropics/claude-code/issues/10267) | AskUserQuestion autoselecting without waiting for user input | Not planned |
-| [#9854](https://github.com/anthropics/claude-code/issues/9854) | AskUserQuestion always returns empty answer without showing anything | Not planned |
+None - scope is clear enough to proceed.
 
-**Why it happens:**
-- The `--dangerously-skip-permissions` flag is intended to bypass permission-based operations
-- But `AskUserQuestion` is a data-gathering tool, not a permission check
-- The flag incorrectly treats user prompts as "permissions" and auto-accepts with empty values
+## Sample Skill Template
 
-**Tested configurations (all have the same issue):**
-- TERM=screen (tmux default)
-- TERM=xterm-256color (changed tmux default-terminal)
-- Direct tmux attach vs XTerminal PTY attachment
-- Claude Code version 2.1.12 (current)
+Reference implementation for new skills:
 
-**This is NOT a Panopticon/XTerminal bug.** The XTerminal correctly forwards all PTY data. The issue is that Claude Code never writes the question options to the terminal in the first place.
+```markdown
+---
+name: pan-help
+description: Overview of all Panopticon commands and capabilities
+---
 
-**Workarounds:**
-1. **Don't use `--dangerously-skip-permissions`** - This is the only reliable fix, but requires manual permission approvals
-2. **Add to CLAUDE.md**: `"AskUserQuestion tool: If response is empty/only punctuation → re-ask in plain text immediately, NO tools until I respond"`
-3. **Use tmux attach directly** - Won't help (same bug), but confirms it's not XTerminal-specific
+# Panopticon Help
 
-**Recommendation:** File a new bug report with Anthropic noting that the issue persists in version 2.1.12 despite the claimed fix in 2.0.67, specifically when running in tmux sessions.
+## Overview
+[What this skill helps with]
 
-**Next Steps:**
-- Manual testing of terminal performance
-- Verify no regressions in normal terminal usage
-- Test reconnection scenarios (backend restart, network interruption)
-- File Claude Code bug report for AskUserQuestion rendering issue
+## When to Use
+- User asks about Panopticon capabilities
+- User is confused about which command to use
+- First-time users exploring the system
 
-## Out of Scope (Explicitly)
+## Available Commands
 
-- Converting ALL execSync calls (too risky for this issue, do incrementally)
-- Authentication/security changes
-- Major UI changes
-- Multiple simultaneous terminal support
-- Fixing other TUI apps (vim, less, etc.) - they can use `tmux attach`
+### Getting Started
+| Command | Description |
+|---------|-------------|
+| `pan install` | Install dependencies and set up environment |
+| `pan up` | Start dashboard and services |
+| `pan status` | Check system health |
+
+### Work Management
+| Command | Description |
+|---------|-------------|
+| `pan work issue <id>` | Spawn agent for an issue |
+| `pan work status` | Show running agents |
+
+## Workflow
+1. Step one
+2. Step two
+3. Step three
+
+## Troubleshooting
+**Problem:** X doesn't work
+**Solution:** Do Y
+```
+
+## Beads Tasks Summary
+
+### Verification Tasks (Created 2025-01-20)
+
+| Priority | Task ID | Description |
+|----------|---------|-------------|
+| P0 | panopticon-qe0 | Sync skills to ~/.panopticon/skills/ |
+| P0 | panopticon-19b | Sync skills to ~/.claude/skills/ |
+| P1 | panopticon-uow | Verify Phase 1 skills (P0): pan-help, install, setup, quickstart, up, down, status, plan, issue |
+| P1 | panopticon-e5w | Verify Phase 2 skills (P1): pan-config, tracker, projects, sync |
+| P1 | panopticon-cjm | Verify Phase 3: Docker templates + pan-docker, pan-network |
+| P1 | panopticon-6kf | Verify Phase 4 skills (P1): pan-approve, tell, kill, health, diagnose |
+| P2 | panopticon-v60 | Verify Phase 5 skills (P2): pan-logs, pan-rescue |
+| P2 | panopticon-fof | Verify bonus skills: pan-code-review, pan-convoy-synthesis |
+
+### Execution Order
+
+1. **P0 (blocking):** panopticon-qe0 → panopticon-19b (sync must happen first)
+2. **P1 (can parallelize):** panopticon-uow, panopticon-e5w, panopticon-cjm, panopticon-6kf
+3. **P2 (after P1):** panopticon-v60, panopticon-fof
+
+## References
+
+- Existing skills structure: `~/.panopticon/skills/bug-fix/SKILL.md`
+- CLI commands: `pan --help`, `pan work --help`
+- Traefik setup: `templates/traefik/`
+- PRD: `/home/eltmon/projects/panopticon/docs/PRD.md`
