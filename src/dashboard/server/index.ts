@@ -3406,7 +3406,7 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
 
   // Check if Docker is running (required for containerization)
   try {
-    execSync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
+    await execAsync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
   } catch {
     return res.status(400).json({
       error: 'Docker is not running. Start Docker Desktop first.',
@@ -3418,7 +3418,7 @@ app.post('/api/workspaces/:issueId/containerize', (req, res) => {
     // The new-feature script will create a proper containerized one
     if (existsSync(workspacePath)) {
       // Run pan workspace destroy first to clean up the git worktree
-      execSync(`pan workspace destroy ${issueId} --force 2>/dev/null || true`, {
+      await execAsync(`pan workspace destroy ${issueId} --force 2>/dev/null || true`, {
         cwd: projectPath,
         encoding: 'utf-8',
       });
@@ -3538,7 +3538,7 @@ app.post('/api/workspaces/:issueId/start', (req, res) => {
 
   // Check if Docker is running
   try {
-    execSync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
+    await execAsync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
   } catch {
     return res.status(400).json({ error: 'Docker is not running. Start Docker Desktop first.' });
   }
@@ -4225,7 +4225,7 @@ PROJECT: ${projectPath}
     if (isGitHubIssue || issueId.toUpperCase().startsWith('PAN-')) {
       try {
         console.log('Running pan sync for Panopticon issue...');
-        execSync('pan sync', { encoding: 'utf-8', timeout: 30000 });
+        await execAsync('pan sync', { encoding: 'utf-8', timeout: 30000 });
         console.log('pan sync completed');
       } catch (syncError: any) {
         console.error('pan sync failed (non-fatal):', syncError.message);
@@ -4280,7 +4280,7 @@ app.post('/api/issues/:issueId/close', async (req, res) => {
 
       try {
         // Use gh CLI for better auth handling
-        execSync(`gh issue close ${number} --repo ${repoPath} --reason completed`, {
+        await execAsync(`gh issue close ${number} --repo ${repoPath} --reason completed`, {
           encoding: 'utf-8',
           timeout: 30000,
         });
@@ -4411,28 +4411,28 @@ app.post('/api/agents', async (req, res) => {
           : projectPath;
 
         // Git add planning and beads directories
-        execSync(`git add .planning/`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+        await execAsync(`git add .planning/`, { cwd: gitRoot, encoding: 'utf-8' });
         // Also add .beads/ if it exists
         if (existsSync(join(gitRoot, '.beads'))) {
-          execSync(`git add .beads/`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync(`git add .beads/`, { cwd: gitRoot, encoding: 'utf-8' });
         }
         // Also add STATE.md and WORKSPACE.md if they exist
         if (existsSync(join(gitRoot, 'STATE.md'))) {
-          execSync(`git add STATE.md`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync(`git add STATE.md`, { cwd: gitRoot, encoding: 'utf-8' });
         }
         if (existsSync(join(gitRoot, 'WORKSPACE.md'))) {
-          execSync(`git add WORKSPACE.md`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync(`git add WORKSPACE.md`, { cwd: gitRoot, encoding: 'utf-8' });
         }
 
         // Check if there are changes to commit
         try {
-          execSync(`git diff --cached --quiet`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync(`git diff --cached --quiet`, { cwd: gitRoot, encoding: 'utf-8' });
           // No changes to commit
           console.log(`No planning changes to commit for ${issueId}`);
         } catch (diffErr) {
           // There are changes, commit and push them
-          execSync(`git commit -m "Planning artifacts for ${issueId} before agent start"`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
-          execSync(`git push`, { cwd: gitRoot, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync(`git commit -m "Planning artifacts for ${issueId} before agent start"`, { cwd: gitRoot, encoding: 'utf-8' });
+          await execAsync(`git push`, { cwd: gitRoot, encoding: 'utf-8' });
           console.log(`Committed and pushed planning artifacts for ${issueId}`);
         }
       } catch (gitErr) {
