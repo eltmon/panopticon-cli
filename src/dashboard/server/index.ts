@@ -3656,7 +3656,7 @@ app.post('/api/workspaces/:issueId/review', async (req, res) => {
 
     // 2. Push the feature branch to remote first
     try {
-      execSync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
       console.log(`Pushed ${branchName} to remote`);
     } catch (pushErr: any) {
       console.log(`Feature branch push note: ${pushErr.message}`);
@@ -3774,7 +3774,7 @@ app.post('/api/workspaces/:issueId/merge', async (req, res) => {
 
     // 2. Push the feature branch to remote BEFORE merging (preserve work)
     try {
-      execSync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
       console.log(`Pushed ${branchName} to remote`);
     } catch (pushErr: any) {
       console.log(`Feature branch push note: ${pushErr.message}`);
@@ -4334,7 +4334,7 @@ app.post('/api/issues/:issueId/close', async (req, res) => {
     // 2. Stop any running agent
     const agentId = `agent-${issueLower}`;
     try {
-      execSync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
+      await execAsync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
         encoding: 'utf-8',
         shell: '/bin/bash'
       });
@@ -4346,7 +4346,7 @@ app.post('/api/issues/:issueId/close', async (req, res) => {
     // 3. Clean up workspace if it exists
     if (existsSync(workspacePath)) {
       try {
-        execSync(`git worktree remove workspaces/feature-${issueLower} --force`, {
+        await execAsync(`git worktree remove workspaces/feature-${issueLower} --force`, {
           cwd: projectPath,
           encoding: 'utf-8'
         });
@@ -4362,7 +4362,7 @@ app.post('/api/issues/:issueId/close', async (req, res) => {
     // 5. Run pan sync for Panopticon issues
     if (isGitHubIssue) {
       try {
-        execSync('pan sync', { encoding: 'utf-8', timeout: 30000 });
+        await execAsync('pan sync', { encoding: 'utf-8', timeout: 30000 });
         console.log('pan sync completed');
       } catch {}
     }
@@ -4559,7 +4559,7 @@ app.post('/api/agents', async (req, res) => {
       // Check if Docker is running
       let dockerRunning = false;
       try {
-        execSync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
+        await execAsync('docker info >/dev/null 2>&1', { encoding: 'utf-8' });
         dockerRunning = true;
       } catch {
         console.log('Docker not running, skipping container start');
@@ -5145,9 +5145,10 @@ app.get('/api/planning/:issueId/status', (req, res) => {
 
   try {
     // Check if tmux session exists
-    const sessions = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
+    const { stdout: sessionsOutput } = await execAsync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""', {
       encoding: 'utf-8',
-    }).trim().split('\n').filter(Boolean);
+    });
+    const sessions = sessionsOutput.trim().split('\n').filter(Boolean);
 
     const sessionExists = sessions.includes(sessionName);
 
@@ -5180,7 +5181,7 @@ app.post('/api/planning/:issueId/message', async (req, res) => {
   try {
     // Kill any existing session first (Claude with --print will have exited anyway)
     try {
-      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
+      await execAsync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
     } catch (e) {
       // Session might not exist
     }
@@ -5352,13 +5353,13 @@ Continue the PLANNING session. Do NOT implement anything.
 });
 
 // Stop planning session (kills tmux session)
-app.delete('/api/planning/:issueId', (req, res) => {
+app.delete('/api/planning/:issueId', async (req, res) => {
   const { issueId } = req.params;
   const sessionName = `planning-${issueId.toLowerCase()}`;
 
   try {
     // Kill tmux session
-    execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
+    await execAsync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
 
     res.json({ success: true });
   } catch (error: any) {
