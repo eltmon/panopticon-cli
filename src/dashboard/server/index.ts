@@ -5492,7 +5492,7 @@ app.post('/api/issues/:id/abort-planning', async (req, res) => {
     }
 
     // Kill the tmux session
-    execSync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
+    await execAsync(`tmux kill-session -t ${sessionName} 2>/dev/null || true`, { encoding: 'utf-8' });
 
     // Clean up agent state files to prevent stale "running" status
     const agentStateDir = join(homedir(), '.panopticon', 'agents', sessionName);
@@ -5540,7 +5540,7 @@ app.post('/api/issues/:id/abort-planning', async (req, res) => {
 
           if (existsSync(workspacePath)) {
             // Remove the git worktree
-            execSync(`git worktree remove "${workspacePath}" --force`, {
+            await execAsync(`git worktree remove "${workspacePath}" --force`, {
               cwd: projectPath,
               encoding: 'utf-8',
             });
@@ -5581,7 +5581,7 @@ app.post('/api/issues/:id/complete-planning', async (req, res) => {
   try {
     // Kill any running planning session
     try {
-      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
+      await execAsync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { encoding: 'utf-8' });
     } catch (e) {
       // Session might not exist
     }
@@ -5635,23 +5635,23 @@ app.post('/api/issues/:id/complete-planning', async (req, res) => {
             : projectPath;
 
           // Git add planning and beads directories
-          execSync(`git add .planning/`, { cwd: gitRoot, encoding: 'utf-8' });
+          await execAsync(`git add .planning/`, { cwd: gitRoot, encoding: 'utf-8' });
           // Also add .beads/ if it exists (planning may create beads tasks)
           if (existsSync(join(gitRoot, '.beads'))) {
-            execSync(`git add .beads/`, { cwd: gitRoot, encoding: 'utf-8' });
+            await execAsync(`git add .beads/`, { cwd: gitRoot, encoding: 'utf-8' });
           }
 
           // Check if there are changes to commit
           try {
-            execSync(`git diff --cached --quiet`, { cwd: gitRoot, encoding: 'utf-8' });
+            await execAsync(`git diff --cached --quiet`, { cwd: gitRoot, encoding: 'utf-8' });
             // No changes to commit
           } catch (diffErr) {
             // There are changes, commit them
-            execSync(`git commit -m "Complete planning for ${id}"`, { cwd: gitRoot, encoding: 'utf-8' });
+            await execAsync(`git commit -m "Complete planning for ${id}"`, { cwd: gitRoot, encoding: 'utf-8' });
           }
 
           // Push to remote
-          execSync(`git push`, { cwd: gitRoot, encoding: 'utf-8' });
+          await execAsync(`git push`, { cwd: gitRoot, encoding: 'utf-8' });
           gitPushed = true;
         } catch (gitErr) {
           console.error('Git commit/push failed:', gitErr);
