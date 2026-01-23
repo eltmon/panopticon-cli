@@ -3,7 +3,7 @@ import cors from 'cors';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
-import { execSync, exec, spawn } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { readFileSync, existsSync, readdirSync, appendFileSync, writeFileSync, renameSync, unlinkSync, statSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -1635,30 +1635,30 @@ async function getGitStatusAsync(workspacePath: string): Promise<{ branch: strin
   }
 }
 
-// Synchronous version for backwards compatibility (use async where possible)
-function getGitStatus(workspacePath: string): { branch: string; uncommittedFiles: number; latestCommit: string } | null {
+// Async version for non-blocking git operations
+async function getGitStatus(workspacePath: string): Promise<{ branch: string; uncommittedFiles: number; latestCommit: string } | null> {
   try {
     if (!existsSync(workspacePath)) return null;
 
-    const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
+    const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
       cwd: workspacePath,
       encoding: 'utf-8',
-    }).trim();
+    });
 
-    const uncommitted = execSync('git status --porcelain 2>/dev/null | wc -l', {
+    const { stdout: uncommitted } = await execAsync('git status --porcelain 2>/dev/null | wc -l', {
       cwd: workspacePath,
       encoding: 'utf-8',
-    }).trim();
+    });
 
-    const latestCommit = execSync('git log -1 --pretty=format:"%s" 2>/dev/null', {
+    const { stdout: latestCommit } = await execAsync('git log -1 --pretty=format:"%s" 2>/dev/null', {
       cwd: workspacePath,
       encoding: 'utf-8',
-    }).trim();
+    });
 
     return {
-      branch,
-      uncommittedFiles: parseInt(uncommitted) || 0,
-      latestCommit: latestCommit.slice(0, 60) + (latestCommit.length > 60 ? '...' : ''),
+      branch: branch.trim(),
+      uncommittedFiles: parseInt(uncommitted.trim()) || 0,
+      latestCommit: latestCommit.trim().slice(0, 60) + (latestCommit.trim().length > 60 ? '...' : ''),
     };
   } catch {
     return null;
@@ -2345,7 +2345,7 @@ app.post('/api/specialists/:name/wake', async (req, res) => {
 
     // Spawn Claude Code with resume flag in tmux
     const cwd = homedir();
-    execSync(
+    await execAsync(
       `tmux new-session -d -s "${tmuxSession}" -c "${cwd}" "claude --resume ${useSessionId}"`,
       { encoding: 'utf-8' }
     );
@@ -2796,14 +2796,15 @@ function getContainerStatus(issueId: string): Record<string, { running: boolean;
 
       let found = false;
       for (const containerName of patterns) {
-        const output = execSync(
+        const { stdout: output } = await execAsync(
           `docker ps -a --filter "name=${containerName}" --format "{{.Status}}" 2>/dev/null || echo ""`,
           { encoding: 'utf-8' }
-        ).trim();
+        );
+        const trimmedOutput = output.trim();
 
-        if (output) {
-          const isRunning = output.startsWith('Up');
-          const uptime = isRunning ? output.replace(/^Up\s+/, '').split(/\s+/)[0] : null;
+        if (trimmedOutput) {
+          const isRunning = trimmedOutput.startsWith('Up');
+          const uptime = isRunning ? trimmedOutput.replace(/^Up\s+/, '').split(/\s+/)[0] : null;
           status[displayName] = { running: isRunning, uptime };
           found = true;
           break;
@@ -2842,10 +2843,10 @@ async function getMrUrlAsync(issueId: string, workspacePath: string): Promise<st
 }
 
 // Synchronous version for backwards compatibility
-function getMrUrl(issueId: string, workspacePath: string): string | null {
+async function getMrUrl(issueId: string, workspacePath: string): Promise<string | null> {
   try {
     // Try to get MR from glab
-    const output = execSync(`glab mr list -A -F json 2>/dev/null || echo "[]"`, {
+    const { stdout: output } = await execAsync(`glab mr list -A -F json 2>/dev/null || echo "[]"`, {
       encoding: 'utf-8',
       cwd: workspacePath,
       maxBuffer: 10 * 1024 * 1024,
@@ -2947,25 +2948,25 @@ function getRepoGitStatus(workspacePath: string): {
       if (!existsSync(repoDir)) continue;
 
       try {
-        const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
+        const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
           cwd: repoDir,
           encoding: 'utf-8',
-        }).trim();
+        });
 
-        const uncommitted = execSync('git status --porcelain 2>/dev/null | wc -l', {
+        const { stdout: uncommitted } = await execAsync('git status --porcelain 2>/dev/null | wc -l', {
           cwd: repoDir,
           encoding: 'utf-8',
-        }).trim();
+        });
 
-        const latestCommit = execSync('git log -1 --pretty=format:"%s" 2>/dev/null || echo ""', {
+        const { stdout: latestCommit } = await execAsync('git log -1 --pretty=format:"%s" 2>/dev/null || echo ""', {
           cwd: repoDir,
           encoding: 'utf-8',
-        }).trim();
+        });
 
         result[key as 'frontend' | 'api'] = {
-          branch,
-          uncommittedFiles: parseInt(uncommitted, 10) || 0,
-          latestCommit: latestCommit.slice(0, 60) + (latestCommit.length > 60 ? '...' : ''),
+          branch: branch.trim(),
+          uncommittedFiles: parseInt(uncommitted.trim(), 10) || 0,
+          latestCommit: latestCommit.trim().slice(0, 60) + (latestCommit.trim().length > 60 ? '...' : ''),
         };
         break; // Found this repo, move to next
       } catch {}
@@ -3160,14 +3161,15 @@ app.get('/api/workspaces/:issueId/clean/preview', (req, res) => {
 
     // Find all files, excluding build artifacts
     const findCmd = `find "${workspacePath}" \\( ${excludePattern} \\) -o -type f -print 2>/dev/null | head -500`;
-    const filesOutput = execSync(findCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }).trim();
-    const files = filesOutput ? filesOutput.split('\n').map(f => f.replace(workspacePath + '/', '')) : [];
+    const { stdout: filesOutput } = await execAsync(findCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+    const files = filesOutput.trim() ? filesOutput.trim().split('\n').map(f => f.replace(workspacePath + '/', '')) : [];
 
     // Get total size (excluding node_modules etc)
     let totalSize = '0';
     try {
       const duCmd = `du -sh "${workspacePath}" --exclude=node_modules --exclude=target --exclude=dist --exclude=.git 2>/dev/null | cut -f1`;
-      totalSize = execSync(duCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }).trim() || '0';
+      const { stdout: sizeOutput } = await execAsync(duCmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+      totalSize = sizeOutput.trim() || '0';
     } catch {
       totalSize = 'unknown';
     }
@@ -3251,19 +3253,19 @@ app.get('/api/workspaces/:issueId/clean/preview', (req, res) => {
           const branchName = `feature/${issueLower}`;
           let compareRef = 'main';
           try {
-            execSync(`git rev-parse --verify ${branchName} 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+            await execAsync(`git rev-parse --verify ${branchName} 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
             compareRef = branchName;
           } catch {
             // Try master if main doesn't exist
             try {
-              execSync(`git rev-parse --verify main 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
+              await execAsync(`git rev-parse --verify main 2>/dev/null`, { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 });
             } catch {
               compareRef = 'master';
             }
           }
 
           // Try to get file content from git
-          const gitContent = execSync(
+          const { stdout: gitContent } = await execAsync(
             `git show ${compareRef}:${relativePath} 2>/dev/null`,
             { cwd: gitRoot, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
           );

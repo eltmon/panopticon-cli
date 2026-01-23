@@ -5,7 +5,8 @@
  */
 
 import chalk from 'chalk';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import {
   getSpecialistStatus,
   getSessionId,
@@ -14,6 +15,11 @@ import {
   isEnabled,
   type SpecialistType,
 } from '../../../lib/cloister/specialists.js';
+
+const execAsync = promisify(exec);
+
+// Helper for async sleep
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 interface WakeOptions {
   task?: string;
@@ -42,10 +48,10 @@ export async function wakeCommand(name: string, options: WakeOptions): Promise<v
       try {
         const escapedTask = options.task.replace(/'/g, "'\\''");
         // CRITICAL: Send text and Enter SEPARATELY (per CLAUDE.md)
-        execSync(`tmux send-keys -t "${status.tmuxSession}" '${escapedTask}'`, { encoding: 'utf-8' });
+        await execAsync(`tmux send-keys -t "${status.tmuxSession}" '${escapedTask}'`, { encoding: 'utf-8' });
         // Small delay before sending Enter
-        execSync('sleep 0.2', { encoding: 'utf-8' });
-        execSync(`tmux send-keys -t "${status.tmuxSession}" Enter`, { encoding: 'utf-8' });
+        await sleep(200);
+        await execAsync(`tmux send-keys -t "${status.tmuxSession}" Enter`, { encoding: 'utf-8' });
         console.log(chalk.green('✓ Task message sent'));
       } catch (error: any) {
         console.log(chalk.red(`Failed to send message: ${error.message}`));
@@ -82,23 +88,23 @@ export async function wakeCommand(name: string, options: WakeOptions): Promise<v
 
     // Create tmux session
     console.log(chalk.dim(`Creating tmux session: ${tmuxSession}`));
-    execSync(
+    await execAsync(
       `tmux new-session -d -s "${tmuxSession}" -c "${cwd}" "${claudeCmd}"`,
       { encoding: 'utf-8' }
     );
 
     // Give Claude a moment to start
-    execSync('sleep 2', { encoding: 'utf-8' });
+    await sleep(2000);
 
     // Send task if provided
     if (options.task) {
       console.log(chalk.dim('Sending task message...'));
       const escapedTask = options.task.replace(/'/g, "'\\''");
       // CRITICAL: Send text and Enter SEPARATELY (per CLAUDE.md)
-      execSync(`tmux send-keys -t "${tmuxSession}" '${escapedTask}'`, { encoding: 'utf-8' });
+      await execAsync(`tmux send-keys -t "${tmuxSession}" '${escapedTask}'`, { encoding: 'utf-8' });
       // Small delay before sending Enter
-      execSync('sleep 0.2', { encoding: 'utf-8' });
-      execSync(`tmux send-keys -t "${tmuxSession}" Enter`, { encoding: 'utf-8' });
+      await sleep(200);
+      await execAsync(`tmux send-keys -t "${tmuxSession}" Enter`, { encoding: 'utf-8' });
     }
 
     // Record wake event

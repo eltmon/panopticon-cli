@@ -6,7 +6,8 @@
  */
 
 import chalk from 'chalk';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import * as readline from 'readline';
 import {
   getSpecialistStatus,
@@ -14,6 +15,8 @@ import {
   getTmuxSessionName,
   type SpecialistType,
 } from '../../../lib/cloister/specialists.js';
+
+const execAsync = promisify(exec);
 
 interface ResetOptions {
   force?: boolean;
@@ -78,7 +81,7 @@ export async function resetCommand(name: string | undefined, options: ResetOptio
   if (status.isRunning) {
     console.log(chalk.dim('Stopping tmux session...'));
     try {
-      execSync(`tmux kill-session -t "${status.tmuxSession}"`, { encoding: 'utf-8', stdio: 'ignore' });
+      await execAsync(`tmux kill-session -t "${status.tmuxSession}"`, { encoding: 'utf-8' });
       console.log(chalk.green('✓ Tmux session stopped'));
     } catch (error: any) {
       console.log(chalk.yellow('⚠ Failed to stop tmux session (may not be running)'));
@@ -153,7 +156,7 @@ async function resetAllSpecialists(options: ResetOptions): Promise<void> {
     // Kill tmux session if running
     if (status.isRunning) {
       try {
-        execSync(`tmux kill-session -t "${tmuxSession}"`, { encoding: 'utf-8', stdio: 'ignore' });
+        await execAsync(`tmux kill-session -t "${tmuxSession}"`, { encoding: 'utf-8' });
         console.log(chalk.dim(`  Stopped ${specialistName} tmux session`));
       } catch {
         // Session may not exist
