@@ -2299,7 +2299,7 @@ app.post('/api/confirmations/:id/respond', async (req, res) => {
 app.get('/api/specialists', async (_req, res) => {
   try {
     const { getAllSpecialistStatus } = await import('../../lib/cloister/specialists.js');
-    const specialists = getAllSpecialistStatus();
+    const specialists = await getAllSpecialistStatus();
     res.json(specialists);
   } catch (error: any) {
     console.error('Error getting specialists:', error);
@@ -2321,7 +2321,7 @@ app.post('/api/specialists/:name/wake', async (req, res) => {
     } = await import('../../lib/cloister/specialists.js');
 
     // Check if already running
-    if (isRunning(name as any)) {
+    if (await isRunning(name as any)) {
       return res.status(400).json({ error: `Specialist ${name} is already running` });
     }
 
@@ -2371,7 +2371,7 @@ app.post('/api/specialists/:name/reset', async (req, res) => {
     } = await import('../../lib/cloister/specialists.js');
 
     // Check if running - must be stopped first
-    if (isRunning(name as any)) {
+    if (await isRunning(name as any)) {
       const tmuxSession = getTmuxSessionName(name as any);
       return res.status(400).json({
         error: `Specialist ${name} is currently running. Stop it first (tmux kill-session -t ${tmuxSession})`

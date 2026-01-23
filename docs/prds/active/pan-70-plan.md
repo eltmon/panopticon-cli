@@ -1,6 +1,6 @@
 # PAN-70: Convert remaining execSync calls to async
 
-## Status: IN_PROGRESS
+## Status: PLANNING
 
 ## Problem Statement
 
@@ -147,36 +147,3 @@ Called by multiple API endpoints. After `isRunning()` and `isIdleAtPrompt()` bec
 - Polling interval tuning (explicitly excluded)
 - New features or functionality
 - Performance optimizations beyond async conversion
-
-## Current Status
-
-### Completed (2026-01-23)
-
-✅ **specialists.ts** (beads: panopticon-btbw)
-- Added `execAsync = promisify(exec)` import
-- Converted all functions to async:
-  - `isRunning()` → returns `Promise<boolean>`
-  - `isIdleAtPrompt()` → returns `Promise<boolean>`
-  - `getSpecialistStatus()` → returns `Promise<SpecialistStatus>`
-  - `getAllSpecialistStatus()` → returns `Promise<SpecialistStatus[]>`
-  - `sendFeedbackToAgent()` → returns `Promise<boolean>`
-  - `initializeSpecialist()` - converted internal execSync calls
-  - `resetSpecialist()` - converted internal execSync calls
-  - `wakeSpecialist()` - converted internal execSync calls
-- Updated all callers:
-  - `src/dashboard/server/index.ts`: API endpoints `/api/specialists`, `/api/specialists/:name/wake`, `/api/specialists/:name/reset`
-  - `src/cli/commands/specialists/list.ts`: `listCommand()`
-  - `src/cli/commands/specialists/reset.ts`: `resetCommand()` and `resetAllSpecialists()`
-  - `src/cli/commands/specialists/wake.ts`: `wakeCommand()`
-
-### Next Steps
-
-1. **health.ts** (beads: panopticon-dy2a) - Convert health check functions
-2. **server/index.ts** (beads: panopticon-0cyo) - Convert remaining execSync calls in API endpoints and polling logic
-
-### Remaining Work
-
-- [ ] Convert health.ts functions to async
-- [ ] Convert server/index.ts remaining execSync calls
-- [ ] Run tests to verify no regressions
-- [ ] Measure terminal latency (P95 < 50ms target)

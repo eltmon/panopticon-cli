@@ -44,7 +44,7 @@ export async function resetCommand(name: string | undefined, options: ResetOptio
   }
 
   const specialistName = name as SpecialistType;
-  const status = getSpecialistStatus(specialistName);
+  const status = await getSpecialistStatus(specialistName);
 
   console.log(chalk.bold(`\nResetting ${status.displayName}...\n`));
 
@@ -125,7 +125,7 @@ async function resetAllSpecialists(options: ResetOptions): Promise<void> {
   // Show current state for all specialists
   console.log(chalk.dim('Current state:'));
   for (const specialistName of ALL_SPECIALISTS) {
-    const status = getSpecialistStatus(specialistName);
+    const status = await getSpecialistStatus(specialistName);
     const stateIcon = status.isRunning ? chalk.yellow('●') : status.sessionId ? chalk.blue('●') : chalk.dim('○');
     const sessionInfo = status.sessionId ? ` (${status.sessionId.substring(0, 8)}...)` : '';
     console.log(`  ${stateIcon} ${specialistName}: ${status.state}${sessionInfo}`);
@@ -147,7 +147,7 @@ async function resetAllSpecialists(options: ResetOptions): Promise<void> {
   // Reset each specialist
   let resetCount = 0;
   for (const specialistName of ALL_SPECIALISTS) {
-    const status = getSpecialistStatus(specialistName);
+    const status = await getSpecialistStatus(specialistName);
     const tmuxSession = getTmuxSessionName(specialistName);
 
     // Kill tmux session if running

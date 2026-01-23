@@ -19,7 +19,7 @@ interface WakeOptions {
   task?: string;
 }
 
-export function wakeCommand(name: string, options: WakeOptions): void {
+export async function wakeCommand(name: string, options: WakeOptions): Promise<void> {
   // Validate specialist name
   const validNames: SpecialistType[] = ['merge-agent', 'review-agent', 'test-agent'];
   if (!validNames.includes(name as SpecialistType)) {
@@ -29,7 +29,7 @@ export function wakeCommand(name: string, options: WakeOptions): void {
   }
 
   const specialistName = name as SpecialistType;
-  const status = getSpecialistStatus(specialistName);
+  const status = await getSpecialistStatus(specialistName);
 
   console.log(chalk.bold(`\nWaking ${status.displayName}...\n`));
 
