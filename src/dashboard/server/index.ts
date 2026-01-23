@@ -26,13 +26,13 @@ import { resolveProjectFromIssue, listProjects, hasProjects, ProjectConfig } fro
 const execAsync = promisify(exec);
 
 // Ensure tmux server is running (starts one if not)
-function ensureTmuxRunning(): void {
+async function ensureTmuxRunning(): Promise<void> {
   try {
-    execSync('tmux list-sessions 2>/dev/null', { encoding: 'utf-8' });
+    await execAsync('tmux list-sessions 2>/dev/null', { encoding: 'utf-8' });
   } catch (e) {
     // Tmux server not running, start it with a dummy session
     try {
-      execSync('tmux new-session -d -s panopticon-init', { encoding: 'utf-8' });
+      await execAsync('tmux new-session -d -s panopticon-init', { encoding: 'utf-8' });
       console.log('Started tmux server');
     } catch (startErr) {
       console.error('Failed to start tmux server:', startErr);
@@ -1420,8 +1420,8 @@ app.post('/api/issues/:id/plan', async (req, res) => {
     // Create Beads tasks
     const beadsResult = { success: false, created: [] as string[], errors: [] as string[] };
     try {
-      const bdPath = execSync('which bd', { encoding: 'utf-8' }).trim();
-      if (bdPath) {
+      const { stdout: bdPath } = await execAsync('which bd', { encoding: 'utf-8' });
+      if (bdPath.trim()) {
         const taskIds = new Map<string, string>();
 
         for (const task of tasks) {
@@ -1441,7 +1441,7 @@ app.post('/api/issues/:id/plan', async (req, res) => {
               cmd += ` -d "${task.description.replace(/"/g, '\\"')}"`;
             }
 
-            const result = execSync(cmd, { encoding: 'utf-8', cwd: projectPath });
+            const { stdout: result } = await execAsync(cmd, { encoding: 'utf-8', cwd: projectPath });
             const idMatch = result.match(/bd-[a-f0-9]+/i) || result.match(/([a-f0-9-]{8,})/i);
             if (idMatch) {
               taskIds.set(fullName, idMatch[0]);
@@ -1454,7 +1454,7 @@ app.post('/api/issues/:id/plan', async (req, res) => {
 
         if (beadsResult.created.length > 0) {
           try {
-            execSync('bd flush', { encoding: 'utf-8', cwd: projectPath });
+            await execAsync('bd flush', { encoding: 'utf-8', cwd: projectPath });
           } catch {}
         }
 
@@ -2284,9 +2284,9 @@ app.post('/api/confirmations/:id/respond', async (req, res) => {
   try {
     // Send response to the agent's tmux session
     const response = confirmed ? 'y' : 'n';
-    execSync(`tmux send-keys -t "${request.sessionName}" '${response}'`, { encoding: 'utf-8' });
+    await execAsync(`tmux send-keys -t "${request.sessionName}" '${response}'`, { encoding: 'utf-8' });
     await new Promise(resolve => setTimeout(resolve, 100));
-    execSync(`tmux send-keys -t "${request.sessionName}" C-m`, { encoding: 'utf-8' });
+    await execAsync(`tmux send-keys -t "${request.sessionName}" C-m`, { encoding: 'utf-8' });
 
     // Remove from pending
     pendingConfirmations.delete(id);
@@ -3850,7 +3850,7 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
 
     // 2. Verify the feature branch exists
     try {
-      execSync(`git rev-parse --verify ${branchName}`, { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync(`git rev-parse --verify ${branchName}`, { cwd: projectPath, encoding: 'utf-8' });
     } catch {
       completePendingOperation(issueId, `Branch ${branchName} does not exist`);
       return res.status(400).json({ error: `Branch ${branchName} does not exist` });
@@ -3860,7 +3860,7 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
     // Use -uno to ignore untracked files - they don't block merges and are often
     // Panopticon-managed symlinks that haven't been added to .gitignore yet
     try {
-      const status = execSync('git status --porcelain -uno', { cwd: workspacePath, encoding: 'utf-8' });
+      const { stdout: status } = await execAsync('git status --porcelain -uno', { cwd: workspacePath, encoding: 'utf-8' });
       if (status.trim()) {
         const error = `Workspace has uncommitted changes. Please commit or stash them first:\ncd ${workspacePath}\ngit status`;
         completePendingOperation(issueId, error);
@@ -3873,7 +3873,7 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
 
     // 4. Push the feature branch to remote BEFORE merging (preserve work)
     try {
-      execSync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync(`git push origin ${branchName}`, { cwd: workspacePath, encoding: 'utf-8' });
       console.log(`Pushed ${branchName} to remote`);
     } catch (pushErr: any) {
       // If push fails, it might already be up to date - that's okay
@@ -3882,9 +3882,9 @@ app.post('/api/workspaces/:issueId/approve', async (req, res) => {
 
     // 5. Switch to main and pull latest
     try {
-      execSync('git checkout main', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync('git checkout main', { cwd: projectPath, encoding: 'utf-8' });
       // Use explicit origin main to avoid tracking branch issues in worktrees
-      execSync('git pull origin main --ff-only', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync('git pull origin main --ff-only', { cwd: projectPath, encoding: 'utf-8' });
     } catch (checkoutErr: any) {
       const error = `Failed to checkout/update main branch: ${checkoutErr.message}`;
       completePendingOperation(issueId, error);
@@ -4007,7 +4007,7 @@ PROJECT: ${projectPath}
       } else if (mergeResult.success && mergeResult.testsStatus === 'FAIL') {
         // merge-agent completed merge but tests failed
         try {
-          execSync('git reset --hard HEAD~1', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync('git reset --hard HEAD~1', { cwd: projectPath, encoding: 'utf-8' });
         } catch {}
         const error = `merge-agent completed merge but tests failed.\nReason: ${mergeResult.reason || 'Tests did not pass'}\n\nPlease fix tests and try again.`;
         completePendingOperation(issueId, error);
@@ -4015,10 +4015,10 @@ PROJECT: ${projectPath}
       } else {
         // merge-agent failed (conflicts it couldn't resolve, or other issue)
         try {
-          execSync('git merge --abort', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync('git merge --abort', { cwd: projectPath, encoding: 'utf-8' });
         } catch {}
         try {
-          execSync('git reset --hard HEAD', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync('git reset --hard HEAD', { cwd: projectPath, encoding: 'utf-8' });
         } catch {}
         const error = `merge-agent could not complete merge.\nReason: ${mergeResult.reason || 'Unknown'}\nFailed files: ${mergeResult.failedFiles?.join(', ') || 'N/A'}\n\nPlease resolve manually:\ncd ${projectPath}\ngit merge ${branchName}`;
         completePendingOperation(issueId, error);
@@ -4027,10 +4027,10 @@ PROJECT: ${projectPath}
     } catch (agentError: any) {
       // merge-agent itself failed (timeout, crash, etc.)
       try {
-        execSync('git merge --abort', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+        await execAsync('git merge --abort', { cwd: projectPath, encoding: 'utf-8' });
       } catch {}
       try {
-        execSync('git reset --hard HEAD', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+        await execAsync('git reset --hard HEAD', { cwd: projectPath, encoding: 'utf-8' });
       } catch {}
       const error = `merge-agent failed to run: ${agentError.message}\n\nPlease resolve manually:\ncd ${projectPath}\ngit merge ${branchName}`;
       completePendingOperation(issueId, error);
@@ -4039,7 +4039,7 @@ PROJECT: ${projectPath}
 
     // 7. CRITICAL: Push merged main to remote BEFORE any cleanup
     try {
-      execSync('git push origin main', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+      await execAsync('git push origin main', { cwd: projectPath, encoding: 'utf-8' });
       pushCompleted = true;
       console.log('Pushed merged main to remote');
     } catch (pushErr: any) {
@@ -4052,7 +4052,7 @@ PROJECT: ${projectPath}
     // 8. Stop any running agent
     const agentId = `agent-${issueLower}`;
     try {
-      execSync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
+      await execAsync(`tmux has-session -t ${agentId} 2>/dev/null && tmux kill-session -t ${agentId}`, {
         encoding: 'utf-8',
         shell: '/bin/bash'
       });
@@ -4078,12 +4078,11 @@ PROJECT: ${projectPath}
 
         // Commit the PRD move
         try {
-          execSync(`git add docs/prds && git commit -m "docs: move ${issueId} PRD to completed"`, {
+          await execAsync(`git add docs/prds && git commit -m "docs: move ${issueId} PRD to completed"`, {
             cwd: projectPath,
-            encoding: 'utf-8',
-            stdio: 'pipe'
+            encoding: 'utf-8'
           });
-          execSync('git push origin main', { cwd: projectPath, encoding: 'utf-8', stdio: 'pipe' });
+          await execAsync('git push origin main', { cwd: projectPath, encoding: 'utf-8' });
           console.log('Committed and pushed PRD move');
         } catch (commitErr: any) {
           // Non-fatal - PRD move is nice to have
@@ -4097,10 +4096,9 @@ PROJECT: ${projectPath}
 
     // 9. Remove the workspace (git worktree) - ONLY after successful push
     try {
-      execSync(`git worktree remove workspaces/feature-${issueLower} --force`, {
+      await execAsync(`git worktree remove workspaces/feature-${issueLower} --force`, {
         cwd: projectPath,
-        encoding: 'utf-8',
-        stdio: 'pipe'
+        encoding: 'utf-8'
       });
       console.log(`Removed workspace for ${issueId}`);
     } catch (wtError: any) {
@@ -5061,7 +5059,7 @@ Start by exploring the codebase to understand the context, then begin the discov
       const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions`;
 
       // Ensure tmux is running before starting session
-      ensureTmuxRunning();
+      await ensureTmuxRunning();
       await execAsync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
 
       // Create agent state file so QuestionDialog can find the JSONL path
@@ -5343,8 +5341,8 @@ Continue the PLANNING session. Do NOT implement anything.
 
     const claudeCommand = `cd "${agentCwd}" && claude --dangerously-skip-permissions --print --verbose --output-format stream-json -p "${continuationPromptPath}" 2>&1 | tee "${outputFile}"`;
 
-    ensureTmuxRunning();
-    execSync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
+    await ensureTmuxRunning();
+    await execAsync(`tmux new-session -d -s ${sessionName} "${claudeCommand}"`, { encoding: 'utf-8' });
 
     res.json({ success: true, sessionName, message: 'Planning session continued' });
   } catch (error: any) {
@@ -6405,7 +6403,9 @@ app.get('/api/metrics/tasks', (req, res) => {
 });
 
 // Ensure tmux is running at startup
-ensureTmuxRunning();
+ensureTmuxRunning().catch((err) => {
+  console.error('Failed to ensure tmux is running:', err);
+});
 
 // Auto-start Cloister if configured
 if (shouldAutoStart()) {
