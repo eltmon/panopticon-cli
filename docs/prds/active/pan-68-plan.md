@@ -1,6 +1,6 @@
 # PAN-68: Dashboard production build crashes - __filename is not defined
 
-## Status: ✅ COMPLETE - ALL TASKS VERIFIED
+## Status: PLANNING COMPLETE
 
 ## Problem Statement
 
@@ -104,44 +104,3 @@ After fix:
 | `better-sqlite3` not installed in production | Already a production dependency in root package.json |
 | Other native addons added later cause same issue | Automated test will catch this |
 | Test is flaky due to build time | Use reasonable timeout, skip in CI if needed |
-
-## Implementation Summary
-
-### Completed Tasks
-
-1. ✅ **Added better-sqlite3 to esbuild externals**
-   - Modified `src/dashboard/server/esbuild.config.mjs`
-   - Added `better-sqlite3` to the external array alongside `@homebridge/node-pty-prebuilt-multiarch`
-
-2. ✅ **Created build verification test**
-   - Created `tests/integration/dashboard/build.test.ts`
-   - Test builds the dashboard server and verifies:
-     - Bundle file is created
-     - No bindings package code in bundle (which causes __filename errors)
-     - Native addons are properly externalized (better-sqlite3, node-pty)
-   - All integration tests pass
-
-3. ✅ **Manual verification**
-   - Tested: Server imports successfully without `__filename is not defined` error
-   - Cloister health database initializes correctly
-   - Server starts without native addon binding errors
-   - Only fails with EADDRINUSE when port already in use (expected behavior)
-
-### Files Modified
-
-- `src/dashboard/server/esbuild.config.mjs` - Added better-sqlite3 to externals
-- `tests/integration/dashboard/build.test.ts` - New test file created
-
-### Next Steps
-
-Manual verification required:
-```bash
-# 1. Build the CLI and dashboard
-npm run build
-
-# 2. Start the production server
-pan up
-
-# 3. Verify it starts without "__filename is not defined" error
-# 4. Check dashboard health endpoints work
-```
