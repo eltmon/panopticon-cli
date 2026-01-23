@@ -10,6 +10,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { getCloisterService } from '../../lib/cloister/service.js';
+
+const execAsync = promisify(exec);
 import { loadCloisterConfig, saveCloisterConfig, shouldAutoStart } from '../../lib/cloister/config.js';
 import { spawnMergeAgentForBranches } from '../../lib/cloister/merge-agent.js';
 import { performHandoff } from '../../lib/cloister/handoff.js';
@@ -184,42 +186,43 @@ const activeReviews: Map<string, ActiveReview> = new Map();
 /**
  * Detect completion patterns from specialist tmux output
  */
-function detectSpecialistCompletion(specialistName: string): {
+async function detectSpecialistCompletion(specialistName: string): Promise<{
   completed: boolean;
   success: boolean | null;
   details: string;
   handoffTo?: string;
   issueId?: string;
-} {
+}> {
   try {
-    const output = execSync(
+    const { stdout: output } = await execAsync(
       `tmux capture-pane -t "specialist-${specialistName}" -p | tail -50`,
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-    ).trim();
+      { encoding: 'utf-8' }
+    );
+    const trimmedOutput = output.trim();
 
     // Extract issue ID from output (look for PAN-XX, MIN-XX, etc.)
-    const issueMatch = output.match(/\b(PAN|MIN|MYN)-\d+\b/i);
+    const issueMatch = trimmedOutput.match(/\b(PAN|MIN|MYN)-\d+\b/i);
     const issueId = issueMatch ? issueMatch[0].toUpperCase() : undefined;
 
     // Review agent completion patterns
     if (specialistName === 'review-agent') {
       // Success: handed off to test-agent
-      if (output.includes('handed off to test-agent') ||
-          output.includes('Hand off to test-agent') ||
-          output.includes('wake test-agent') ||
-          output.includes('Waking Test Agent')) {
+      if (trimmedOutput.includes('handed off to test-agent') ||
+          trimmedOutput.includes('Hand off to test-agent') ||
+          trimmedOutput.includes('wake test-agent') ||
+          trimmedOutput.includes('Waking Test Agent')) {
         return { completed: true, success: true, details: 'Review passed, handed to test-agent', handoffTo: 'test-agent', issueId };
       }
       // Blocked: issues found
-      if (output.includes('BLOCKED') || output.includes('issues found') ||
-          output.includes('send-feedback-to-agent') && output.includes('issue')) {
+      if (trimmedOutput.includes('BLOCKED') || trimmedOutput.includes('issues found') ||
+          trimmedOutput.includes('send-feedback-to-agent') && trimmedOutput.includes('issue')) {
         return { completed: true, success: false, details: 'Review blocked - issues found', issueId };
       }
       // Explicitly passed
-      if (output.includes('review task is already complete') ||
-          output.includes('Code is clean') ||
-          output.includes('LGTM') ||
-          output.includes('approved')) {
+      if (trimmedOutput.includes('review task is already complete') ||
+          trimmedOutput.includes('Code is clean') ||
+          trimmedOutput.includes('LGTM') ||
+          trimmedOutput.includes('approved')) {
         return { completed: true, success: true, details: 'Review passed', issueId };
       }
     }
@@ -227,18 +230,18 @@ function detectSpecialistCompletion(specialistName: string): {
     // Test agent completion patterns
     if (specialistName === 'test-agent') {
       // Success: tests passed, handed to merge
-      if ((output.includes('Test Results: PASS') || output.includes('tests passed')) &&
-          (output.includes('merge-agent') || output.includes('Handoff'))) {
+      if ((trimmedOutput.includes('Test Results: PASS') || trimmedOutput.includes('tests passed')) &&
+          (trimmedOutput.includes('merge-agent') || trimmedOutput.includes('Handoff'))) {
         return { completed: true, success: true, details: 'Tests passed, handed to merge-agent', handoffTo: 'merge-agent', issueId };
       }
       // Tests passed without handoff
-      if (output.includes('Test Results: PASS') ||
-          (output.includes('passed') && output.includes('skipped') && !output.includes('failed'))) {
+      if (trimmedOutput.includes('Test Results: PASS') ||
+          (trimmedOutput.includes('passed') && trimmedOutput.includes('skipped') && !trimmedOutput.includes('failed'))) {
         return { completed: true, success: true, details: 'Tests passed', issueId };
       }
       // Tests failed
-      if (output.includes('Test Results: FAIL') || output.includes('FAILED') ||
-          output.includes('tests failed')) {
+      if (trimmedOutput.includes('Test Results: FAIL') || trimmedOutput.includes('FAILED') ||
+          trimmedOutput.includes('tests failed')) {
         return { completed: true, success: false, details: 'Tests failed', issueId };
       }
     }
@@ -246,12 +249,12 @@ function detectSpecialistCompletion(specialistName: string): {
     // Merge agent completion patterns
     if (specialistName === 'merge-agent') {
       // Success: merge complete
-      if (output.includes('Merge complete') || output.includes('pushed to main') ||
-          output.includes('main -> main')) {
+      if (trimmedOutput.includes('Merge complete') || trimmedOutput.includes('pushed to main') ||
+          trimmedOutput.includes('main -> main')) {
         return { completed: true, success: true, details: 'Merge completed successfully', issueId };
       }
       // Merge failed
-      if (output.includes('merge failed') || output.includes('conflict') && output.includes('error')) {
+      if (trimmedOutput.includes('merge failed') || trimmedOutput.includes('conflict') && trimmedOutput.includes('error')) {
         return { completed: true, success: false, details: 'Merge failed', issueId };
       }
     }
@@ -265,7 +268,7 @@ function detectSpecialistCompletion(specialistName: string): {
 /**
  * Poll active reviews and update status automatically
  */
-function pollReviewStatus(): void {
+async function pollReviewStatus(): Promise<void> {
   const statuses = loadReviewStatuses();
 
   for (const [issueId, status] of Object.entries(statuses)) {
@@ -278,7 +281,7 @@ function pollReviewStatus(): void {
 
     // Check review-agent if reviewing
     if (status.reviewStatus === 'reviewing') {
-      const detection = detectSpecialistCompletion('review-agent');
+      const detection = await detectSpecialistCompletion('review-agent');
       if (detection.completed && detection.issueId?.toUpperCase() === issueId.toUpperCase()) {
         if (detection.success) {
           console.log(`[auto-detect] Review passed for ${issueId}`);
@@ -299,7 +302,7 @@ function pollReviewStatus(): void {
     // Check test-agent if testing
     if (status.testStatus === 'testing' ||
         (status.reviewStatus === 'passed' && status.testStatus === 'pending')) {
-      const detection = detectSpecialistCompletion('test-agent');
+      const detection = await detectSpecialistCompletion('test-agent');
       if (detection.completed && detection.issueId?.toUpperCase() === issueId.toUpperCase()) {
         if (detection.success) {
           console.log(`[auto-detect] Tests passed for ${issueId}`);
@@ -317,7 +320,11 @@ function pollReviewStatus(): void {
 }
 
 // Start polling for review status updates (every 5 seconds)
-setInterval(pollReviewStatus, 5000);
+setInterval(() => {
+  pollReviewStatus().catch((error) => {
+    console.error('[auto-detect] Error in pollReviewStatus:', error);
+  });
+}, 5000);
 console.log('[auto-detect] Started automatic review status polling');
 
 const PENDING_OPS_FILE = join(homedir(), '.panopticon', 'pending-operations.json');
