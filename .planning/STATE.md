@@ -1,333 +1,139 @@
-# PAN-33: Cloister Phase 6 - Advanced Features
+# PAN-66: Review Skills Inside Agents
 
-## Status: ✅ COMPLETE (Review Feedback Addressed)
+## Status: COMPLETE
 
 ## Summary
 
-Successfully implemented ALL 11 tasks for Cloister Phase 6 - Advanced Features.
-
-**Review Feedback (2026-01-23):** All critical issues addressed:
-1. ✅ **Persistence Added** - Cost and FPP violation data now persisted to JSON files with atomic writes
-2. ✅ **Unit Tests Added** - 21 comprehensive tests for cost-monitor, fpp-violations, and session-rotation
-3. ✅ **Import Validation Fixed** - Added try-catch error handling for checkHook runtime import
-
-### ✅ Completed (11/11 tasks)
-
-**Reliability Fixes (3/3)**
-1. ✅ **1.1 Cloister Auto-Start** - Dashboard auto-starts Cloister on launch when configured
-2. ✅ **1.2 Specialist State Reset** - Specialists reset working directory and prompt buffer between tasks
-3. ✅ **1.3 Confirmation Dialog UI** - Modal confirmation system for destructive actions
-
-**Core Monitoring (3/3)**
-4. ✅ **2.1 Auto-Restart on Crash** - Agents restart after crashes with exponential backoff (30/60/120s)
-5. ✅ **2.2 Mass Death Detection** - Detects 3+ deaths in 30s window, pauses spawns
-6. ✅ **2.3 FPP Violation Detection** - Escalating nudges for idle agents with pending work
-
-**Cost Management (1/1)**
-7. ✅ **3.1 Cost Limits and Alerts** - Per-agent, per-issue, daily limits with 80% threshold warnings
-
-**Session Management (1/1)**
-8. ✅ **4.1 Session Rotation** - Tiered memory rotation for merge-agent at 100k tokens
-
-**Metrics Dashboard (3/3)**
-9. ✅ **5.1 Metrics API Endpoints** - Backend endpoints for summary, costs, handoffs, stuck agents
-10. ✅ **5.2 Metrics Summary Widgets** - Dashboard widgets showing key daily metrics
-11. ✅ **5.3 Dedicated /metrics Page** - Full-page metrics view with cost breakdowns
-
----
+Document all skills available to agents and update GitHub issue PAN-66 with the compiled list.
 
 ## Decision Log
 
-### Scope Decisions
-
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| AskUserQuestion interception | **DROPPED** | Previously attempted, didn't work well |
-| Priority approach | All features + reliability fixes | Comprehensive Phase 6 implementation |
-| Specialist state reset | Reset working directory between tasks | Preserves session context while clearing stale state |
-| Merge-agent memory | Tiered: 100/50/20 merges | 100 with hash+message, 50 with detail, 20 with full diffs |
-| Cost limit response | Alert + manual intervention | No automatic stopping, user decides |
-| Metrics UI | Both page and widgets | Summary widgets on main dashboard + dedicated /metrics page |
-| FPP nudge style | Escalating (Status → Reminder → Direct) | Progressively more insistent, 3 stages |
-| Auto-restart | Exponential backoff (30/60/120s) | 3 max retries then alert |
-| Branch delete confirmation | Add alert dialog UI | Strengthen confirmation with proper dashboard dialog |
+| Output format | Names + descriptions | User preference - detailed enough to be useful, not exhaustive |
+| Skill source | Skill tool definition | Most accurate reflection of what's actually available |
+| Categorization | By purpose/domain | Makes the list navigable |
+
+## Deliverable
+
+Update GitHub issue PAN-66 with a categorized list of all available skills.
 
 ---
 
-## Architecture Overview
+## Skills Available to Agents
 
-### 1. Reliability Fixes
+### Panopticon Workflow (pan-*)
 
-#### 1.1 Cloister Auto-Start
-**Problem:** Dashboard saves `auto_start` to config but doesn't read it on startup.
+| Skill | Description |
+|-------|-------------|
+| pan-plan | Interactive planning workflow with AI-assisted discovery |
+| pan-setup | First-time configuration wizard for Panopticon |
+| pan-install | Guide through installing Panopticon prerequisites |
+| pan-quickstart | Quick start guide combining installation, setup, and first workspace |
+| pan-up | Start Panopticon dashboard and services |
+| pan-down | Stop Panopticon dashboard and services gracefully |
+| pan-restart | Restart the Panopticon dashboard (frontend and API server) |
+| pan-status | Check running agents, workspaces, and system health |
+| pan-health | Check Panopticon system health |
+| pan-diagnose | Troubleshoot common Panopticon issues |
+| pan-logs | View and analyze agent and system logs |
+| pan-config | View and edit Panopticon configuration |
+| pan-projects | Add, remove, and manage Panopticon-managed projects |
+| pan-docker | Docker template selection and configuration for workspaces |
+| pan-network | Traefik, local domains, and platform-specific networking setup |
+| pan-tracker | Configure issue tracker integration (Linear, GitHub, GitLab) |
+| pan-help | Overview of all Panopticon commands and capabilities |
+| pan-sync | Sync Panopticon skills to Claude Code and other AI tools |
+| pan-issue | Create workspace and spawn autonomous agent for an issue |
+| pan-tell | Send a message to a running agent |
+| pan-kill | Stop a running agent |
+| pan-approve | Approve agent work and merge merge request |
+| pan-rescue | Recover work from crashed or stopped agents |
+| pan-convoy-synthesis | Synthesize results from parallel agent work in a convoy |
+| pan-code-review | Orchestrated parallel code review with automatic synthesis |
+| pan-skill-creator | Guide for creating and distributing Panopticon skills |
+| pan-subagent-creator | Create custom Claude Code subagents with isolated context |
 
-**Solution:** In `src/dashboard/server/index.ts`, import `shouldAutoStart()` from config and call `getCloisterService().start()` if true.
+### Development Workflow
 
-```typescript
-// At server startup, after ensureTmuxRunning()
-import { shouldAutoStart } from '../../lib/cloister/config.js';
+| Skill | Description |
+|-------|-------------|
+| feature-work | Standard workflow for implementing new features with testing |
+| bug-fix | Systematic approach to investigating and fixing bugs |
+| refactor | Safe refactoring approach with test coverage first |
+| release | Step-by-step release process with versioning |
+| dependency-update | Safe approach to updating dependencies |
+| incident-response | Structured approach to production incidents |
+| onboard-codebase | Systematic approach to understanding a new codebase |
+| work-complete | Checklist for agents to properly complete work and signal readiness |
 
-if (shouldAutoStart()) {
-  console.log('🔔 Auto-starting Cloister...');
-  getCloisterService().start();
-}
-```
+### Code Quality
 
-#### 1.2 Specialist State Reset
-**Problem:** Specialists retain stale working directory and prompt buffer between tasks.
+| Skill | Description |
+|-------|-------------|
+| code-review | Comprehensive code review covering correctness, security, performance |
+| code-review-security | Deep security analysis focusing on OWASP Top 10 |
+| code-review-performance | Deep performance analysis focusing on algorithms and resources |
 
-**Solution:** Add `resetSpecialist()` function that:
-1. Sends `Ctrl+C` to cancel any pending command
-2. Runs `cd ~` to reset working directory
-3. Clears the prompt buffer with `Ctrl+U`
-4. Called before sending new task prompts
+### Design & UI
 
-**Location:** `src/lib/cloister/specialists.ts`
+| Skill | Description |
+|-------|-------------|
+| stitch-design-md | Analyze Stitch projects and synthesize semantic design system |
+| stitch-react-components | Convert Stitch designs into modular Vite and React components |
+| web-design-guidelines | Review UI code for accessibility and UX best practices |
+| react-best-practices | React and Next.js performance optimization guidelines |
 
-#### 1.3 Branch Delete Confirmation Dialog
-**Problem:** Hook confirmation for branch deletes happens in tmux, not visible in dashboard.
+### AI Self-Monitoring (Not User-Invoked)
 
-**Solution:** When a hook requires confirmation for destructive actions:
-1. Dashboard detects confirmation request (via tmux output polling)
-2. Shows alert dialog with action details
-3. User confirms/denies in dashboard
-4. Response sent to tmux session
+| Skill | Description |
+|-------|-------------|
+| knowledge-capture | Triggers when AI detects confusion or corrected mistakes |
+| refactor-radar | Detects architectural debt causing repeated AI mistakes |
 
-**Files:**
-- `src/dashboard/server/index.ts` - Add confirmation detection endpoint
-- `src/dashboard/frontend/src/components/ConfirmationDialog.tsx` - New component
-- Integrate with existing terminal/agent views
+### Utilities
 
----
+| Skill | Description |
+|-------|-------------|
+| beads | Git-backed issue tracker for multi-session work with dependencies |
+| session-health | Detect and clean stuck Claude Code sessions |
+| skill-creator | Guide for creating effective Claude Code skills |
+| send-feedback-to-agent | Send findings from specialist agents back to issue agents |
 
-### 2. Auto-Restart on Crash
+### Work Command Aliases
 
-**Config Addition:**
-```toml
-[auto_restart]
-enabled = true
-max_retries = 3
-backoff_seconds = [30, 60, 120]
-```
+These are alternative invocation patterns for common operations:
 
-**Implementation:**
-- Track crash count per agent in memory
-- On agent death detection (tmux session dies):
-  1. Check if crashes < max_retries
-  2. Wait backoff_seconds[crashCount] before restart
-  3. Restart with `--resume` using stored session ID
-  4. If max_retries exceeded, emit alert event
+- work-status, work-tell, work-approve, work-pending, work-issues, work-plan, work-issue
+- work:plan, work:triage, work:list, work:tell, work:issue, work:kill, work:pending, work:status, work:approve
+- pan:health, pan:down, pan:help, pan:sync, pan:up
 
-**Location:** `src/lib/cloister/service.ts`
+### Miscellaneous
 
-**New Types:**
-```typescript
-interface AgentCrashTracker {
-  agentId: string;
-  crashCount: number;
-  lastCrash: Date;
-  nextRetryAt?: Date;
-  gaveUp: boolean;
-}
-```
-
----
-
-### 3. Mass Death Detection
-
-**Trigger:** 3+ agent deaths within 30 seconds
-
-**Response:**
-1. Pause all new agent spawns
-2. Emit `mass_death_detected` event
-3. Show critical alert in dashboard
-4. Require manual acknowledgment to resume spawning
-
-**Implementation:**
-- Maintain rolling window of death timestamps
-- On each death, check if 3+ in last 30 seconds
-- Set `spawnsPaused` flag that `pan work issue` respects
-
-**Location:** `src/lib/cloister/service.ts`
-
----
-
-### 4. FPP Violation Detection
-
-**Detection Triggers:**
-- Agent has work on hook but no activity for `hook_idle_minutes` (default: 5)
-- PR approved but not merged for `pr_approved_minutes` (default: 10)
-- Review requested but agent idle for `review_pending_minutes` (default: 15)
-
-**Escalation Sequence:**
-1. **Nudge 1 (Status check):** "What's your current status? You have [pending work] on your hook."
-2. **Nudge 2 (Gentle reminder):** "I notice you've been idle. Do you need help with [pending item]?"
-3. **Nudge 3 (Direct action):** "You have pending work: [description]. Execute it now or explain why you're blocked."
-4. **Escalate:** After 3 failed nudges, alert user via dashboard/notification
-
-**New Types:**
-```typescript
-interface FPPViolation {
-  agentId: string;
-  type: 'hook_idle' | 'pr_stale' | 'review_pending' | 'status_mismatch';
-  detectedAt: string;
-  nudgeCount: number;
-  lastNudgeAt?: string;
-  resolved: boolean;
-}
-```
-
-**Location:** New file `src/lib/cloister/fpp-violations.ts`
+| Skill | Description |
+|-------|-------------|
+| test-specialist-workflow | Test the full specialist handoff pipeline |
+| damage-control | Lock/Unlock Pattern Editing |
+| test-all | Run all backend and frontend tests, generate markdown report |
+| resources | Show system resource breakdown (RAM, CPU, Docker containers) |
+| claude-hud:setup | Configure claude-hud as your statusline |
+| claude-hud:configure | Configure HUD display options |
+| ralph-wiggum:ralph-loop | Start Ralph Wiggum loop in current session |
+| ralph-wiggum:help | Explain Ralph Wiggum technique and available commands |
 
 ---
 
-### 5. Cost Limits and Alerts
+## Implementation Complete
 
-**Config Addition:**
-```toml
-[cost_limits]
-per_agent_usd = 10.00
-per_issue_usd = 25.00
-daily_total_usd = 100.00
-alert_threshold = 0.8  # Alert at 80%
-```
-
-**Implementation:**
-- Hook into existing cost tracking (`src/lib/cost.ts`)
-- After each cost log, check against limits
-- If threshold exceeded: emit alert event
-- Dashboard shows cost warning banner
-
-**Alert Levels:**
-- **Warning (80%):** Yellow banner, no action
-- **Limit reached (100%):** Red banner, prominent notification
-- No automatic stopping - user decides
-
-**Location:** `src/lib/cloister/cost-monitor.ts` (new)
+✅ Posted complete categorized skills list to GitHub issue PAN-66 as comment
+   - Comment URL: https://github.com/eltmon/panopticon-cli/issues/66#issuecomment-3791796034
+   - Includes all skills organized by category
+   - Posted: 2026-01-23
 
 ---
 
-### 6. Session Rotation for Merge-Agent
+## Notes
 
-**Trigger:** When merge-agent context exceeds threshold (configurable, default 100k tokens)
-
-**Process:**
-1. Detect high context via token counting
-2. Build memory file with tiered merge history:
-   - Last 100 merges: commit hash + message
-   - Last 50 merges: + files changed, conflict summary
-   - Last 20 merges: + full diff summaries, resolution strategies
-3. Kill current session
-4. Start fresh session with memory file injected
-5. Archive old session ID
-
-**Location:** `src/lib/cloister/session-rotation.ts` (new)
-
-**Memory File Format:**
-```markdown
-# Merge Agent Memory
-
-## Recent Merge History (Last 100)
-| Hash | Message | Date |
-|------|---------|------|
-| abc123 | Merge feature/foo | 2026-01-20 |
-...
-
-## Detailed Merges (Last 50)
-### abc123 - Merge feature/foo
-Files: src/app.ts, src/lib/utils.ts
-Conflicts: None
-...
-
-## Full Context Merges (Last 20)
-### abc123 - Merge feature/foo
-[Full diff summary and resolution notes]
-...
-```
-
----
-
-### 7. Metrics Dashboard
-
-#### Summary Widgets (Main Dashboard)
-- Cost today (with sparkline)
-- Active agents count
-- Stuck incidents today
-- Handoff success rate
-
-#### Dedicated /metrics Page
-- Cost over time (line chart, 7/30 day)
-- Cost by model (pie chart)
-- Handoff success rate (bar chart)
-- Stuck incidents per day (bar chart)
-- Model usage breakdown (stacked area)
-- Cost savings from model routing
-
-**Files:**
-- `src/dashboard/frontend/src/components/MetricsSummary.tsx` (new)
-- `src/dashboard/frontend/src/pages/Metrics.tsx` (new)
-- `src/dashboard/server/index.ts` - Add `/api/metrics` endpoints
-
----
-
-## Implementation Order
-
-1. **Reliability Fixes** (foundation)
-   - 1.1 Cloister auto-start
-   - 1.2 Specialist state reset
-   - 1.3 Confirmation dialog (can be parallel)
-
-2. **Core Monitoring** (safety net)
-   - 2.1 Auto-restart on crash
-   - 2.2 Mass death detection
-   - 2.3 FPP violation detection
-
-3. **Cost Management** (awareness)
-   - 3.1 Cost limits and alerts
-
-4. **Session Rotation** (merge-agent improvement)
-   - 4.1 Token counting for specialists
-   - 4.2 Memory file generation
-   - 4.3 Session rotation logic
-
-5. **Metrics Dashboard** (visibility)
-   - 5.1 API endpoints
-   - 5.2 Summary widgets
-   - 5.3 Dedicated metrics page
-
----
-
-## Files to Create
-
-- `src/lib/cloister/fpp-violations.ts` - FPP violation detection and nudging
-- `src/lib/cloister/cost-monitor.ts` - Cost limit monitoring
-- `src/lib/cloister/session-rotation.ts` - Session rotation logic
-- `src/dashboard/frontend/src/components/ConfirmationDialog.tsx` - Alert dialog
-- `src/dashboard/frontend/src/components/MetricsSummary.tsx` - Dashboard widgets
-- `src/dashboard/frontend/src/pages/Metrics.tsx` - Metrics page
-
-## Files to Modify
-
-- `src/dashboard/server/index.ts` - Auto-start, confirmation endpoints, metrics API
-- `src/lib/cloister/service.ts` - Auto-restart, mass death detection
-- `src/lib/cloister/specialists.ts` - State reset function
-- `src/lib/cloister/config.ts` - New config sections
-- `src/dashboard/frontend/src/App.tsx` - Add /metrics route
-
----
-
-## Testing Strategy
-
-1. **Unit Tests:**
-   - FPP violation detection logic
-   - Cost limit calculations
-   - Session rotation memory generation
-
-2. **Integration Tests:**
-   - Auto-restart with mocked tmux
-   - Mass death detection window
-
-3. **E2E Tests:**
-   - Metrics page rendering
-   - Confirmation dialog flow
-   - Cost alert banner display
+- Skills are defined in `~/.panopticon/skills/` and symlinked to `~/.claude/skills/`
+- The Skill tool definition in the system prompt is the authoritative source for available skills
+- Some skills are AI-initiated (knowledge-capture, refactor-radar) and don't appear in user-invocable lists
