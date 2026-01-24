@@ -1,191 +1,110 @@
-# PAN-73: Dashboard Issue Search with Command Palette
+# PAN-86: Beads skill - Clarify beads ID vs GitHub/Linear issue ID confusion
 
-## Current Status
+## Problem Statement
 
-**Status**: ✅ Implementation Complete - Rebased & Ready for Review
+Agents using the beads skill are getting confused between three different ID systems:
 
-All components have been implemented and verified:
-- ✅ Installed cmdk dependency
-- ✅ Created useSearch hook with debounced search and relevance scoring
-- ✅ Created SearchModal component with filter toggles
-- ✅ Created SearchResults component with grouping and external links
-- ✅ Integrated search into App.tsx with global '/' keyboard shortcut
-- ✅ Build successful with no TypeScript errors
-- ✅ Fixed vitest config to exclude Playwright E2E tests
-- ✅ Rebased onto main (was 34 commits behind, resolved STATE.md conflict)
-- ✅ All 28 unit tests passing after rebase
+| System | Format | Example |
+|--------|--------|---------|
+| Beads | `repo-hash` | `panopticon-3eb7`, `panopticon-6ax` |
+| Beads (hierarchical) | `repo-hash.N` | `panopticon-3eb7.4` |
+| GitHub Issues | `PREFIX-number` | `PAN-84`, `PAN-73` |
+| Linear Issues | `PREFIX-number` | `MIN-123`, `HH-456` |
 
-Ready for test-agent review.
+**Root cause:** The SKILL.md example uses `pan-5` which looks confusingly similar to GitHub's `PAN-5`:
 
-## Summary
+```bash
+# Example: PAN-5 is blocked by PAN-1
+bd dep add pan-5 pan-1 --type blocks
+```
 
-Add a search feature to the Panopticon dashboard using the `cmdk` library for a command palette UI. Search will filter issues client-side from the React Query cache, respecting current board filters.
+This caused the agent in planning-pan-84 to try `bd create --parent PAN-84` instead of a valid beads ID.
 
 ## Decisions Made
 
-### 1. Data Sources
-**Decision**: Search all issues displayed on the dashboard (Linear + GitHub + Rally)
+### Scope: Docs + CLI Enhancement Follow-up
+- Fix documentation in SKILL.md
+- Create upstream GitHub issue for `bd list --external-ref` filter
 
-The `/api/issues` endpoint already aggregates issues from all configured sources. Search will operate on whatever issues are currently loaded in the TanStack Query cache.
-
-### 2. UI Library
-**Decision**: Use `cmdk` library
-
-- Standard command palette UX with built-in keyboard navigation
-- Well-maintained, lightweight dependency
-- Consistent with MYN's approach
-
-### 3. Search Strategy
-**Decision**: Client-side filtering
-
-- Filter issues already in React Query cache
-- Instant results, no network latency
-- No backend changes needed
-- Suitable for typical issue counts (< 1000)
-
-### 4. Result Behavior
-**Decision**: Click selects on board + link icon opens external URL
-
-- Clicking a result: closes search modal, highlights the issue card on kanban board
-- Link icon: opens issue URL in new tab (Linear/GitHub/Rally)
-- Provides both quick navigation and external access
-
-### 5. Search Fields
-**Decision**: Title + identifier by default, with toggle for description
-
-- Default: search `title` and `identifier` fields (fast, low noise)
-- Optional "Deep search" toggle: also includes `description` field
-- Configurable in the search UI
-
-### 6. Filter Scope
-**Decision**: Respect current board filters
-
-- Search operates within what's visible on the board
-- Honors current cycle, project, and "include completed" filters
-- Consistent mental model with the board view
-
-### 7. Search Filters in Command Palette
-**Decision**: Source + Status filters
-
-- Source toggle: Linear / GitHub / Rally (show/hide by source)
-- Status toggle: show/hide completed issues
-- Clean UI, most useful filters without clutter
-
-## Technical Approach
-
-### Files to Create
-
-1. **`src/dashboard/frontend/src/components/search/SearchModal.tsx`**
-   - Command palette modal using `cmdk`
-   - Keyboard shortcut: `/` to open
-   - Filter toggles for source and status
-   - "Deep search" toggle for description search
-
-2. **`src/dashboard/frontend/src/components/search/SearchResults.tsx`**
-   - Result list with grouping by source
-   - Shows: identifier, title, status badge, priority indicator
-   - Click handler for board selection
-   - External link icon
-
-3. **`src/dashboard/frontend/src/hooks/useSearch.ts`**
-   - Custom hook for search logic
-   - Filters issues from React Query cache
-   - Relevance scoring (identifier match > title match > description match)
-   - Debounced input handling
-
-### Files to Modify
-
-1. **`src/dashboard/frontend/src/App.tsx`**
-   - Add global keyboard listener for `/` key
-   - Render SearchModal component
-   - Pass board state (selected issue, filters) to search
-
-2. **`src/dashboard/frontend/package.json`**
-   - Add `cmdk` dependency
-
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `/` | Open search modal (from anywhere) |
-| `Esc` | Close search modal |
-| `↑`/`↓` | Navigate results |
-| `Enter` | Select result (closes modal, highlights on board) |
-| `⌘+Enter` | Open external URL in new tab |
-
-### Search Algorithm
-
-1. Get issues from React Query cache (`queryKey: ['issues']`)
-2. Apply board filters (cycle, project, completed)
-3. Apply search filters (source, status)
-4. Text match against title + identifier (+ description if deep search)
-5. Score and sort results:
-   - Exact identifier match: score 100
-   - Identifier starts with query: score 80
-   - Title contains query: score 50
-   - Description contains query: score 20
-6. Return top 20 results
-
-### UI Layout
-
-```
-┌─────────────────────────────────────────┐
-│ 🔍 Search issues...               [⌘K] │
-├─────────────────────────────────────────┤
-│ Filters: [Linear] [GitHub] [✓ Open]     │
-│          [□ Deep search]                │
-├─────────────────────────────────────────┤
-│ Linear                                  │
-│ ┌─────────────────────────────────────┐ │
-│ │ PAN-73  Add issue search to dash   │ │
-│ │ Todo • Priority 3           [↗]    │ │
-│ └─────────────────────────────────────┘ │
-│ ┌─────────────────────────────────────┐ │
-│ │ PAN-72  Fix merge detection        │ │
-│ │ Done • Priority 2           [↗]    │ │
-│ └─────────────────────────────────────┘ │
-│                                         │
-│ GitHub                                  │
-│ ┌─────────────────────────────────────┐ │
-│ │ #73  Dashboard search feature      │ │
-│ │ Open • Priority 3           [↗]    │ │
-│ └─────────────────────────────────────┘ │
-└─────────────────────────────────────────┘
+### Linking Pattern: Recommend `--external-ref`
+The canonical way to link beads issues to external trackers:
+```bash
+bd create "Fix auth bug" --external-ref PAN-84 --json
 ```
 
-## Acceptance Criteria
+### Location: In SKILL.md Directly
+Add a dedicated "## ID Systems" section near the top of SKILL.md for maximum visibility.
 
-- [ ] `/` opens search modal from anywhere in dashboard
-- [ ] Search filters issues by title and identifier
-- [ ] "Deep search" toggle includes description in search
-- [ ] Results grouped by source (Linear, GitHub, Rally)
-- [ ] Results show identifier, title, status, priority
-- [ ] Clicking result closes modal and selects issue on board
-- [ ] Link icon opens external URL in new tab
-- [ ] Source and status filter toggles work correctly
-- [ ] Search respects current board filters
-- [ ] ESC closes modal
-- [ ] Debounced input (no excessive re-renders)
-- [ ] Minimum 2 characters before search triggers
+### Upstream Enhancement: Yes
+Create GitHub issue in steveyegge/beads requesting `bd list --external-ref PAN-84` filter capability.
+
+## Implementation Plan
+
+### Task 1: Add ID Systems Section to SKILL.md
+Add new section after "## bd vs TodoWrite" explaining:
+- Beads ID format (`repo-hash`)
+- How it differs from GitHub/Linear IDs
+- Clear warning that `--parent`, `--deps` expect beads IDs
+
+### Task 2: Fix Confusing Example
+Replace the problematic example:
+```bash
+# BEFORE (confusing)
+# Example: PAN-5 is blocked by PAN-1
+bd dep add pan-5 pan-1 --type blocks
+
+# AFTER (clear)
+# Example: panopticon-abc1 is blocked by panopticon-def2
+bd dep add panopticon-abc1 panopticon-def2 --type blocks
+```
+
+### Task 3: Document External Tracker Linking
+Add workflow for linking beads to GitHub/Linear:
+- Using `--external-ref` flag on create
+- Current limitation: no `bd list --external-ref` filter
+- Workaround: use labels or title conventions
+
+### Task 4: Create Upstream GitHub Issue
+File issue in steveyegge/beads requesting:
+- `bd list --external-ref PAN-84` filter
+- `bd show --by-external-ref PAN-84` lookup
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `/home/eltmon/projects/panopticon/skills/beads/SKILL.md` | Add ID Systems section, fix example, document --external-ref |
 
 ## Out of Scope
 
-- Server-side search endpoint (not needed with current data volume)
-- Full-text search with ranking algorithms (simple substring matching is sufficient)
-- Search history / recent searches
-- Saved searches / bookmarks
-- Fuzzy matching (may add later if requested)
+- Changes to beads CLI itself (that's upstream work)
+- Changes to other resource files (keep focused)
+- Adding new resource files (keep it in SKILL.md for visibility)
 
-## Dependencies to Install
+## Success Criteria
 
-```bash
-npm install cmdk
-```
+1. An agent reading SKILL.md clearly understands beads IDs vs GitHub/Linear IDs
+2. The confusing `pan-5` / `PAN-5` example is replaced with realistic beads IDs
+3. The `--external-ref` flag is documented with example usage
+4. Upstream issue filed for `bd list --external-ref` capability
 
-## Risks & Mitigations
+## Current Status
 
-| Risk | Mitigation |
-|------|------------|
-| Large issue count slows search | React 18's `useDeferredValue` for non-blocking renders |
-| cmdk styling conflicts | Use Tailwind classes, override defaults |
-| Keyboard shortcut conflicts | `/` is standard; disable when input is focused |
+**2026-01-23**: Tasks 1-3 completed
+
+### ✅ Completed
+- **Task 1**: Added "## ID Systems" section to SKILL.md after "## bd vs TodoWrite"
+  - Documented beads ID format (`repo-hash` like `panopticon-3eb7`)
+  - Clear table comparing beads IDs vs GitHub/Linear IDs
+  - Warning that `bd dep add`, `--parent`, `--deps` expect beads IDs
+- **Task 2**: Fixed confusing example in Dependencies section
+  - Changed from `bd dep add pan-5 pan-1` to `bd dep add panopticon-abc1 panopticon-def2`
+  - Example now uses realistic beads ID format
+- **Task 3**: Documented `--external-ref` flag
+  - Examples for linking to GitHub and Linear issues
+  - Noted current limitation (no `bd list --external-ref` filter)
+  - Suggested workarounds (labels, title conventions)
+
+### 🔄 Remaining Work
+- **Task 4**: File upstream GitHub issue in steveyegge/beads for `bd list --external-ref` feature
+  - See beads task: `panopticon-x68a`
