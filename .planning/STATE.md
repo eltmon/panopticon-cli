@@ -90,7 +90,7 @@ File issue in steveyegge/beads requesting:
 
 ## Current Status
 
-**2026-01-23**: Tasks 1-3 completed
+**2026-01-23**: All tasks completed ✅
 
 ### ✅ Completed
 - **Task 1**: Added "## ID Systems" section to SKILL.md after "## bd vs TodoWrite"
@@ -104,7 +104,13 @@ File issue in steveyegge/beads requesting:
   - Examples for linking to GitHub and Linear issues
   - Noted current limitation (no `bd list --external-ref` filter)
   - Suggested workarounds (labels, title conventions)
+- **Task 4**: Filed upstream GitHub issue
+  - Issue: https://github.com/steveyegge/beads/issues/1295
+  - Requested `bd list --external-ref` and `bd show --by-external-ref` features
+  - Closed beads task: `panopticon-x68a`
 
-### 🔄 Remaining Work
-- **Task 4**: File upstream GitHub issue in steveyegge/beads for `bd list --external-ref` feature
-  - See beads task: `panopticon-x68a`
+### ✅ Success Criteria Met
+1. ✅ Agents reading SKILL.md clearly understand beads IDs vs GitHub/Linear IDs
+2. ✅ Confusing `pan-5`/`PAN-5` example replaced with realistic beads IDs
+3. ✅ `--external-ref` flag documented with example usage
+4. ✅ Upstream issue filed for `bd list --external-ref` capability
