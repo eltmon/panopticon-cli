@@ -1,0 +1,17 @@
+# Node.js Frontend Dockerfile (monorepo)
+FROM node:{{ variables.node_version }}-alpine
+
+WORKDIR /app
+
+# Copy root package.json for workspace setup
+COPY package*.json ./
+COPY frontend/package*.json ./frontend/
+
+# Install dependencies
+RUN npm ci
+
+WORKDIR /app/frontend
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

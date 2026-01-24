@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "{{ computed.ports.frontend | default(variables.app_port) }}:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - WATCHPACK_POLLING=true
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/{{ variables.database_name }}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+{% if docker.traefik.enabled %}
+      - {{ docker.traefik.network }}
+{% endif %}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.{{ workspace.name }}.rule=Host(`{{ workspace.name }}.{{ docker.traefik.domain }}`)"
+      - "traefik.http.routers.{{ workspace.name }}.tls=true"
+      - "traefik.http.services.{{ workspace.name }}.loadbalancer.server.port=3000"
+      - "traefik.docker.network={{ docker.traefik.network }}"
+
+  postgres:
+{% if docker.database.strategy == 'shared' %}
+    external: true
+    name: panopticon-postgres
+{% else %}
+    image: {{ docker.database.image | default('postgres:16-alpine') }}
+    environment:
+      - POSTGRES_DB={{ variables.database_name }}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "{{ computed.ports.database | default(variables.db_port) }}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+{% endif %}
+
+volumes:
+  postgres-data:
+
+networks:
+  app-network:
+    driver: bridge
+{% if docker.traefik.enabled %}
+  {{ docker.traefik.network }}:
+    external: true
+{% endif %}

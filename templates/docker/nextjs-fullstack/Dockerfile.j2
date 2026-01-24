@@ -1,0 +1,16 @@
+# Next.js Development Dockerfile
+FROM node:{{ variables.node_version }}-alpine
+
+WORKDIR /app
+
+# Install dependencies first for caching
+COPY package*.json ./
+RUN npm ci
+
+# Source files are mounted in dev mode
+COPY . .
+
+EXPOSE 3000
+
+# Run Next.js dev server
+CMD ["npm", "run", "dev"]

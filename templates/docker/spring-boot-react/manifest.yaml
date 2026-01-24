@@ -1,0 +1,67 @@
+name: spring-boot-react
+description: Spring Boot backend with React/Vite frontend, PostgreSQL, and Redis
+version: 1.0.0
+
+services:
+  - frontend
+  - api
+  - database
+  - redis
+
+variables:
+  app_name:
+    type: string
+    default: myapp
+    description: Application name used for service naming
+  java_version:
+    type: number
+    default: 21
+    description: Java version for Spring Boot
+  node_version:
+    type: number
+    default: 20
+    description: Node.js version for frontend
+  database_name:
+    type: string
+    default: appdb
+    description: PostgreSQL database name
+  enable_redis:
+    type: boolean
+    default: true
+    description: Enable Redis cache
+  enable_debug:
+    type: boolean
+    default: true
+    description: Enable Java remote debugging
+  frontend_port:
+    type: number
+    default: 5173
+    description: Frontend dev server port
+  api_port:
+    type: number
+    default: 8080
+    description: API server port
+  db_port:
+    type: number
+    default: 5432
+    description: PostgreSQL port
+  redis_port:
+    type: number
+    default: 6379
+    description: Redis port
+
+outputs:
+  - source: docker-compose.yml.j2
+    destination: docker-compose.yml
+  - source: Dockerfile.api.j2
+    destination: Dockerfile.api
+  - source: Dockerfile.frontend.j2
+    destination: Dockerfile.frontend
+  - source: dev.sh.j2
+    destination: dev
+    executable: true
+  - source: .env.j2
+    destination: .env.example
+
+copy:
+  - README.md

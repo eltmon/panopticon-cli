@@ -26,16 +26,33 @@ This skill guides you through selecting and configuring Docker templates for Pan
 - Configuring container settings
 - Integrating with Traefik for local HTTPS
 
+## Quick Start
+
+```bash
+# List available templates
+pan workspace templates
+
+# Create workspace with template
+pan workspace create PAN-123 --template spring-boot-react
+
+# Auto-detect template from project files
+pan workspace create PAN-123 --docker
+
+# Disable Traefik routing
+pan workspace create PAN-123 --template nextjs-fullstack --no-traefik
+
+# Use shared database
+pan workspace create PAN-123 --template monorepo --shared-db
+```
+
 ## Available Templates
 
 | Template | Stack | Services |
 |----------|-------|----------|
-| `spring-boot` | Java 21 + Maven | PostgreSQL, Redis |
-| `react-vite` | React + Vite | - |
-| `nextjs` | Next.js 14+ | - |
-| `dotnet` | .NET 8 | SQL Server |
-| `python-fastapi` | Python 3.12 + FastAPI | PostgreSQL, Redis |
-| `monorepo` | Frontend + Backend | PostgreSQL, Redis |
+| `spring-boot-react` | Java 21 + React/Vite | frontend, api, database, redis |
+| `nextjs-fullstack` | Next.js 14+ + PostgreSQL | frontend, database |
+| `python-fastapi` | Python 3.12 + FastAPI | api, database, frontend (optional), redis |
+| `monorepo` | Node.js Frontend + Backend | frontend, api, database, redis |
 
 ## Template Selection Guide
 

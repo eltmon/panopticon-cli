@@ -1,0 +1,60 @@
+name: python-fastapi
+description: Python FastAPI backend with PostgreSQL and optional React frontend
+version: 1.0.0
+
+services:
+  - api
+  - database
+  - frontend
+
+variables:
+  app_name:
+    type: string
+    default: myapp
+    description: Application name
+  python_version:
+    type: string
+    default: "3.12"
+    description: Python version
+  enable_frontend:
+    type: boolean
+    default: false
+    description: Include React frontend
+  database_name:
+    type: string
+    default: appdb
+    description: PostgreSQL database name
+  enable_redis:
+    type: boolean
+    default: false
+    description: Enable Redis cache
+  api_port:
+    type: number
+    default: 8000
+    description: FastAPI server port
+  frontend_port:
+    type: number
+    default: 5173
+    description: Frontend dev server port
+  db_port:
+    type: number
+    default: 5432
+    description: PostgreSQL port
+
+outputs:
+  - source: docker-compose.yml.j2
+    destination: docker-compose.yml
+  - source: Dockerfile.api.j2
+    destination: Dockerfile.api
+  - source: dev.sh.j2
+    destination: dev
+    executable: true
+  - source: .env.j2
+    destination: .env.example
+  - source: Dockerfile.frontend.j2
+    destination: Dockerfile.frontend
+    condition: variables.enable_frontend
+
+copy:
+  - README.md
+  - requirements.txt.example

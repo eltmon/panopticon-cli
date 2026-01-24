@@ -1,0 +1,24 @@
+# Spring Boot Development Dockerfile
+FROM eclipse-temurin:{{ variables.java_version }}-jdk-jammy
+
+WORKDIR /app
+
+# Install Maven
+RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
+
+# Copy pom.xml first for dependency caching
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+
+# Development mode - source files are mounted
+COPY src ./src
+
+# Expose application port and debug port
+EXPOSE 8080 5005
+
+{% if variables.enable_debug %}
+# Run with remote debugging enabled
+CMD ["mvn", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"]
+{% else %}
+CMD ["mvn", "spring-boot:run"]
+{% endif %}

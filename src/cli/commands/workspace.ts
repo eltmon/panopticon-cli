@@ -13,6 +13,8 @@ import {
   findProjectByTeam,
   extractTeamPrefix,
 } from '../../lib/projects.js';
+import { TemplateEngine } from '../../lib/template-engine.js';
+import { PortManager } from '../../lib/port-manager.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -28,7 +30,16 @@ export function registerWorkspaceCommands(program: Command): void {
     .option('--no-skills', 'Skip skills symlink setup')
     .option('--labels <labels>', 'Comma-separated labels for routing (e.g., docs,marketing)')
     .option('--project <path>', 'Explicit project path (overrides registry)')
+    .option('--template <name>', 'Docker template to use (spring-boot-react, nextjs-fullstack, python-fastapi, monorepo)')
+    .option('--docker', 'Enable Docker-based workspace (auto-detect template if not specified)')
+    .option('--no-traefik', 'Disable Traefik routing')
+    .option('--shared-db', 'Use shared database instead of isolated')
     .action(createCommand);
+
+  workspace
+    .command('templates')
+    .description('List available Docker templates')
+    .action(listTemplatesCommand);
 
   workspace
     .command('list')
@@ -50,6 +61,71 @@ interface CreateOptions {
   skills?: boolean;
   labels?: string;
   project?: string;
+  template?: string;
+  docker?: boolean;
+  traefik?: boolean;
+  sharedDb?: boolean;
+}
+
+async function listTemplatesCommand(): Promise<void> {
+  const templateEngine = new TemplateEngine([
+    join(__dirname, '..', '..', '..', 'templates', 'docker'),
+  ]);
+
+  const templates = templateEngine.listTemplates();
+
+  if (templates.length === 0) {
+    console.log(chalk.dim('No templates found.'));
+    return;
+  }
+
+  console.log(chalk.bold('\nAvailable Docker Templates\n'));
+
+  for (const tpl of templates) {
+    console.log(chalk.cyan(tpl.name));
+    console.log(`  ${tpl.manifest.description || chalk.dim('No description')}`);
+    console.log(`  Services: ${tpl.manifest.services?.join(', ') || 'none'}`);
+    console.log('');
+  }
+}
+
+/**
+ * Auto-detect the project template based on files in the project root
+ */
+function detectProjectTemplate(projectRoot: string): string | undefined {
+  // Check for Spring Boot (pom.xml with spring-boot)
+  if (existsSync(join(projectRoot, 'pom.xml'))) {
+    // Check if there's also a React/Vite frontend
+    if (existsSync(join(projectRoot, 'frontend', 'package.json')) ||
+        existsSync(join(projectRoot, 'client', 'package.json'))) {
+      return 'spring-boot-react';
+    }
+    return undefined; // Spring Boot only, use default docker template
+  }
+
+  // Check for Next.js
+  if (existsSync(join(projectRoot, 'next.config.js')) ||
+      existsSync(join(projectRoot, 'next.config.mjs')) ||
+      existsSync(join(projectRoot, 'next.config.ts'))) {
+    return 'nextjs-fullstack';
+  }
+
+  // Check for Python FastAPI
+  if ((existsSync(join(projectRoot, 'requirements.txt')) ||
+       existsSync(join(projectRoot, 'pyproject.toml'))) &&
+      existsSync(join(projectRoot, 'main.py'))) {
+    return 'python-fastapi';
+  }
+
+  // Check for Node.js monorepo
+  if (existsSync(join(projectRoot, 'package.json'))) {
+    const packageJson = require(join(projectRoot, 'package.json'));
+    if (packageJson.workspaces) {
+      return 'monorepo';
+    }
+  }
+
+  return undefined;
 }
 
 async function createCommand(issueId: string, options: CreateOptions): Promise<void> {
@@ -187,6 +263,74 @@ async function createCommand(issueId: string, options: CreateOptions): Promise<v
       skillsResult = mergeSkillsIntoWorkspace(workspacePath);
     }
 
+    // Generate Docker configuration from template (if enabled)
+    let dockerResult: { success: boolean; filesGenerated: string[]; ports?: Record<string, number> } | undefined;
+    if (options.template || options.docker) {
+      spinner.text = 'Generating Docker configuration...';
+
+      const templateEngine = new TemplateEngine([
+        join(__dirname, '..', '..', '..', 'templates', 'docker'),
+      ]);
+      const portManager = new PortManager();
+
+      // Determine template to use
+      let templateName = options.template;
+      if (!templateName && options.docker) {
+        // Auto-detect based on project files
+        templateName = detectProjectTemplate(projectRoot);
+      }
+
+      if (templateName) {
+        // Allocate ports for this workspace
+        const templates = templateEngine.listTemplates();
+        const templateInfo = templates.find(t => t.name === templateName);
+        const services = templateInfo?.manifest.services || ['frontend', 'api', 'database'];
+        const allocation = portManager.allocate(folderName, services);
+
+        // Build context for template rendering
+        const result = templateEngine.generate(templateName, workspacePath, {
+          workspace: {
+            name: folderName,
+            path: workspacePath,
+            issueId: issueId.toUpperCase(),
+            branch: branchName,
+          },
+          project: {
+            name: projectName || basename(projectRoot),
+            path: projectRoot,
+          },
+          docker: {
+            portStrategy: 'offset',
+            basePorts: { frontend: 5173, api: 8080, database: 5432, redis: 6379 },
+            portOffset: allocation.offset,
+            traefik: {
+              enabled: options.traefik !== false,
+              domain: 'localhost',
+              network: 'traefik-public',
+            },
+            database: {
+              strategy: options.sharedDb ? 'shared' : 'isolated',
+              image: 'postgres:16-alpine',
+              port: 5432,
+            },
+            caches: {},
+          },
+          variables: {},
+          computed: { ports: allocation.ports },
+        });
+
+        dockerResult = {
+          success: result.success,
+          filesGenerated: result.filesGenerated,
+          ports: allocation.ports,
+        };
+
+        if (!result.success) {
+          spinner.warn(`Docker template warnings: ${result.errors.join(', ')}`);
+        }
+      }
+    }
+
     spinner.succeed('Workspace created!');
 
     console.log('');
@@ -207,7 +351,22 @@ async function createCommand(issueId: string, options: CreateOptions): Promise<v
       console.log('');
     }
 
+    if (dockerResult) {
+      console.log(chalk.bold('Docker:'));
+      console.log(`  Files:    ${dockerResult.filesGenerated.join(', ')}`);
+      if (dockerResult.ports) {
+        const portEntries = Object.entries(dockerResult.ports);
+        if (portEntries.length > 0) {
+          console.log(`  Ports:    ${portEntries.map(([k, v]) => `${k}:${v}`).join(', ')}`);
+        }
+      }
+      console.log('');
+    }
+
     console.log(chalk.dim(`Next: cd ${workspacePath}`));
+    if (dockerResult) {
+      console.log(chalk.dim(`      ./dev  # Start Docker containers`));
+    }
 
   } catch (error: any) {
     spinner.fail(error.message);

@@ -1,0 +1,59 @@
+name: monorepo
+description: Node.js monorepo with separate frontend/backend services, PostgreSQL, and Redis
+version: 1.0.0
+
+services:
+  - frontend
+  - api
+  - database
+  - redis
+
+variables:
+  app_name:
+    type: string
+    default: myapp
+    description: Application name
+  node_version:
+    type: number
+    default: 20
+    description: Node.js version
+  database_name:
+    type: string
+    default: appdb
+    description: PostgreSQL database name
+  enable_redis:
+    type: boolean
+    default: true
+    description: Enable Redis cache
+  frontend_port:
+    type: number
+    default: 5173
+    description: Frontend dev server port
+  api_port:
+    type: number
+    default: 3001
+    description: Backend API server port
+  db_port:
+    type: number
+    default: 5432
+    description: PostgreSQL port
+  redis_port:
+    type: number
+    default: 6379
+    description: Redis port
+
+outputs:
+  - source: docker-compose.yml.j2
+    destination: docker-compose.yml
+  - source: Dockerfile.frontend.j2
+    destination: Dockerfile.frontend
+  - source: Dockerfile.backend.j2
+    destination: Dockerfile.backend
+  - source: dev.sh.j2
+    destination: dev
+    executable: true
+  - source: .env.j2
+    destination: .env.example
+
+copy:
+  - README.md
