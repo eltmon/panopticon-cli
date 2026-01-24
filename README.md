@@ -794,17 +794,51 @@ volumes:
 - Set `PNPM_HOME=/path` to configure the pnpm store location
 - Mount a named volume for the store to share across containers
 
-#### Coming Soon: Template-Based Workspaces
+#### Template-Based Workspaces
 
-A comprehensive template system for Docker orchestration is in development ([#96](https://github.com/eltmon/panopticon-cli/issues/96)). This will provide:
+Panopticon includes a template system for Docker orchestration that provides:
 
-- **Zero-config for common stacks** - Spring Boot + React, Next.js, Python + FastAPI
-- **Full customization** - Custom templates, port strategies, cache sharing
-- **Polyrepo support** - Multiple git repos in one workspace
+- **Zero-config for common stacks** - Spring Boot + React, Next.js, Python + FastAPI, Node.js monorepo
+- **Automatic port management** - Each workspace gets unique ports (offset strategy)
+- **Traefik integration** - HTTPS routing like `https://feature-pan-96.localhost`
 - **Database isolation options** - Shared or per-workspace databases
 - **Interactive setup** - `/pan-docker` skill to guide configuration
 
-Until then, use `workspace_command` to point to your project's custom setup script.
+**Available Templates:**
+
+| Template | Stack | Services |
+|----------|-------|----------|
+| `spring-boot-react` | Java 21 + React/Vite | frontend, api, database, redis |
+| `nextjs-fullstack` | Next.js 14+ + PostgreSQL | frontend, database |
+| `python-fastapi` | Python 3.12 + FastAPI | api, database, frontend (optional) |
+| `monorepo` | Node.js Frontend + Backend | frontend, api, database, redis |
+
+**Usage:**
+
+```bash
+# List available templates
+pan workspace templates
+
+# Create workspace with specific template
+pan workspace create PAN-123 --template spring-boot-react
+
+# Auto-detect template from project files
+pan workspace create PAN-123 --docker
+
+# Disable Traefik routing (use direct ports)
+pan workspace create PAN-123 --template nextjs-fullstack --no-traefik
+
+# Use shared database across workspaces
+pan workspace create PAN-123 --template monorepo --shared-db
+```
+
+Each template generates:
+- `docker-compose.yml` - Configured for the workspace
+- `Dockerfile.*` - Dev Dockerfiles for each service
+- `dev` - Startup script (executable)
+- `.env.example` - Environment template with assigned ports
+
+For complex projects that need more customization, use `workspace_command` to point to your project's custom setup script.
 
 ### Managing Projects
 
