@@ -11,9 +11,11 @@
 - ✅ Created getFriendlyModelName() helper function
 - ✅ Added tooltip to agent badge showing full model ID
 - ✅ Updated cost breakdown "By Model" section with friendly names and tooltips
-- ✅ All tests passing (511 passed, 46 skipped)
+- ✅ Added comprehensive tests for getActiveSessionModel() (9 test cases)
+- ✅ All tests passing (520 passed, 46 skipped)
 - ✅ Changes committed and pushed to feature/pan-91
 - ✅ All beads tasks closed
+- ✅ Code review blocker resolved (tests added)
 
 **PR:** https://github.com/eltmon/panopticon-cli/pull/new/feature/pan-91
 
