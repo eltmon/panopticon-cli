@@ -6,6 +6,7 @@ export interface PresetCardProps {
   preset: ModelPreset;
   selected: boolean;
   onSelect: () => void;
+  onPreview?: () => void;
 }
 
 const PRESET_COLORS: Record<ModelPreset, { border: string; bg: string; accent: string }> = {
@@ -14,9 +15,14 @@ const PRESET_COLORS: Record<ModelPreset, { border: string; bg: string; accent: s
   budget: { border: 'border-[#10b981]', bg: 'ring-[#10b981]', accent: '#10b981' },
 };
 
-export function PresetCard({ preset, selected, onSelect }: PresetCardProps) {
+export function PresetCard({ preset, selected, onSelect, onPreview }: PresetCardProps) {
   const config = PRESET_CONFIGS[preset];
   const colors = PRESET_COLORS[preset];
+
+  const handlePreviewClick = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card selection when clicking preview
+    onPreview?.();
+  };
 
   return (
     <div
@@ -58,6 +64,17 @@ export function PresetCard({ preset, selected, onSelect }: PresetCardProps) {
 
       {/* Cost Meter */}
       <CostIndicator level={config.costLevel} color={colors.accent} />
+
+      {/* Preview Button */}
+      {onPreview && (
+        <button
+          onClick={handlePreviewClick}
+          className="mt-2 w-full bg-slate-800/50 hover:bg-slate-700/50 text-white text-sm font-medium py-2 rounded-md transition-colors flex items-center justify-center gap-2"
+        >
+          <span className="material-symbols-outlined text-base">visibility</span>
+          Preview Full Configuration
+        </button>
+      )}
     </div>
   );
 }

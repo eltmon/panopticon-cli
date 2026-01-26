@@ -6,6 +6,7 @@ import { PresetSelector } from './Preset/PresetSelector';
 import { ProviderPanel } from './Provider/ProviderPanel';
 import { WorkTypeOverrides } from './Override/WorkTypeOverrides';
 import { OverrideConfigModal } from './Override/OverrideConfigModal';
+import { PresetPreviewModal } from './Preset/PresetPreviewModal';
 import { AvailableModels } from './Override/ModelSelector';
 import { Button } from './Shared/Button';
 
@@ -72,6 +73,10 @@ export function SettingsPage() {
   const [overrideModalOpen, setOverrideModalOpen] = useState(false);
   const [selectedWorkType, setSelectedWorkType] = useState<WorkTypeId | null>(null);
 
+  // Preset preview modal state
+  const [presetPreviewOpen, setPresetPreviewOpen] = useState(false);
+  const [previewPreset, setPreviewPreset] = useState<ModelPreset | null>(null);
+
   // Fetch preset models based on current preset selection
   const { data: presetModels } = useQuery({
     queryKey: ['presetModels', formData?.models.preset || 'balanced'],
@@ -134,6 +139,17 @@ export function SettingsPage() {
         preset,
       },
     });
+  };
+
+  const handlePresetPreview = (preset: ModelPreset) => {
+    setPreviewPreset(preset);
+    setPresetPreviewOpen(true);
+  };
+
+  const handleApplyPreset = () => {
+    if (previewPreset) {
+      handlePresetChange(previewPreset);
+    }
   };
 
   const handleProviderToggle = (provider: Provider) => {
@@ -234,7 +250,7 @@ export function SettingsPage() {
       </div>
 
       {/* Preset Selector */}
-      <PresetSelector selected={formData.models.preset} onChange={handlePresetChange} />
+      <PresetSelector selected={formData.models.preset} onChange={handlePresetChange} onPreview={handlePresetPreview} />
 
       {/* Provider Panel */}
       <ProviderPanel
@@ -253,6 +269,15 @@ export function SettingsPage() {
         presetModels={presetModels || {}}
         onConfigureOverride={handleConfigureOverride}
         onRemoveOverride={handleRemoveOverride}
+      />
+
+      {/* Preset Preview Modal */}
+      <PresetPreviewModal
+        preset={previewPreset || 'balanced'}
+        isOpen={presetPreviewOpen}
+        onClose={() => setPresetPreviewOpen(false)}
+        onApply={handleApplyPreset}
+        currentOverrides={formData.models.overrides}
       />
 
       {/* Override Config Modal */}
