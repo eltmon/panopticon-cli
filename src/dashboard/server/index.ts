@@ -23,6 +23,7 @@ import { readHandoffEvents, readIssueHandoffEvents, readAgentHandoffEvents, getH
 import { readSpecialistHandoffs, getSpecialistHandoffStats } from '../../lib/cloister/specialist-handoff-logger.js';
 import { checkAllTriggers } from '../../lib/cloister/triggers.js';
 import { getAgentState, getAgentRuntimeState, saveAgentRuntimeState, getActivity, appendActivity, saveSessionId, getSessionId, resumeAgent } from '../../lib/agents.js';
+import { cleanupOldAgents } from '../../lib/cleanup.js';
 import { getAgentHealth } from '../../lib/cloister/health.js';
 import { getRuntimeForAgent } from '../../lib/runtimes/index.js';
 import { resolveProjectFromIssue, listProjects, hasProjects, ProjectConfig, findProjectByTeam, extractTeamPrefix } from '../../lib/projects.js';
@@ -5995,6 +5996,21 @@ app.post('/api/agents', async (req, res) => {
   }
 });
 
+// POST /api/agents/cleanup - Clean up old agent directories (PAN-85)
+app.post('/api/agents/cleanup', async (req, res) => {
+  try {
+    const { dryRun = false, ageThresholdDays } = req.body;
+
+    // Call cleanup function from cleanup.ts
+    const result = await cleanupOldAgents(ageThresholdDays, dryRun);
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error cleaning up agents:', error);
+    res.status(500).json({ error: 'Failed to clean up agents: ' + error.message });
+  }
+});
+
 // Get skills
 app.get('/api/skills', (_req, res) => {
   try {
@@ -8019,64 +8035,54 @@ app.get('/api/costs/summary', (_req, res) => {
   }
 });
 
-// GET /api/costs/by-issue - Costs grouped by issue (calculated from actual session files)
+// GET /api/costs/by-issue - Costs grouped by issue (PAN-85: migrated to cache)
 app.get('/api/costs/by-issue', async (_req, res) => {
   try {
     const issueMap: Record<string, { totalCost: number; tokenCount: number; sessionCount: number; model?: string; durationMinutes?: number }> = {};
 
-    // Read all agent state files and calculate costs from actual session data
-    // Include both regular agents (agent-*) and planning agents (planning-*)
-    const agentsDir = join(homedir(), '.panopticon', 'agents');
-    if (existsSync(agentsDir)) {
-      const agentDirs = readdirSync(agentsDir).filter(name => name.startsWith('agent-') || name.startsWith('planning-'));
+    // PRIMARY: Read from pre-computed cache (PAN-81 event-sourced tracking)
+    const cacheFile = join(homedir(), '.panopticon', 'costs', 'by-issue.json');
+    if (existsSync(cacheFile)) {
+      try {
+        const cacheContent = readFileSync(cacheFile, 'utf-8');
+        const cache = JSON.parse(cacheContent);
 
-      // Process agents in parallel batches to avoid blocking (ASYNC)
-      const BATCH_SIZE = 5;
-      for (let i = 0; i < agentDirs.length; i += BATCH_SIZE) {
-        const batch = agentDirs.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (agentDir) => {
-            try {
-              const stateFile = join(agentsDir, agentDir, 'state.json');
-              if (!existsSync(stateFile)) return null;
+        // Map cache format to expected format
+        for (const [issueId, issueData] of Object.entries(cache.issues || {})) {
+          const data = issueData as any;
+          const key = issueId.toLowerCase();
 
-              const state = JSON.parse(readFileSync(stateFile, 'utf-8'));
-              if (!state.issueId || !state.workspace) return null;
+          // Calculate total token count (input + output + cache tokens)
+          const totalTokens =
+            (data.inputTokens || 0) +
+            (data.outputTokens || 0) +
+            (data.cacheReadTokens || 0) +
+            (data.cacheWriteTokens || 0);
 
-              const sessionData = await parseWorkspaceSessionUsageAsync(state.workspace);
-              return { issueId: state.issueId, sessionData };
-            } catch {
-              return null;
+          // Get primary model (model with highest cost)
+          let primaryModel: string | undefined;
+          if (data.models) {
+            const modelEntries = Object.entries(data.models) as [string, number][];
+            if (modelEntries.length > 0) {
+              modelEntries.sort((a, b) => b[1] - a[1]);
+              primaryModel = modelEntries[0][0];
             }
-          })
-        );
-
-        // Aggregate results
-        for (const result of results) {
-          if (!result) continue;
-          const key = result.issueId.toLowerCase();
-          const sessionData = result.sessionData;
-
-          if (!issueMap[key]) {
-            issueMap[key] = { totalCost: 0, tokenCount: 0, sessionCount: 0 };
           }
 
-          issueMap[key].totalCost += sessionData.cost;
-          issueMap[key].tokenCount += sessionData.tokenCount;
-          issueMap[key].sessionCount += 1;
-          issueMap[key].model = sessionData.model;
-
-          if (sessionData.startTime && sessionData.endTime) {
-            const start = new Date(sessionData.startTime).getTime();
-            const end = new Date(sessionData.endTime).getTime();
-            const minutes = (end - start) / (1000 * 60);
-            issueMap[key].durationMinutes = (issueMap[key].durationMinutes || 0) + minutes;
-          }
+          issueMap[key] = {
+            totalCost: data.totalCost || 0,
+            tokenCount: totalTokens,
+            sessionCount: data.eventCount || 0, // Use eventCount as proxy for sessionCount
+            model: primaryModel,
+            // durationMinutes not available in cache yet - could be added in future
+          };
         }
+      } catch (error) {
+        console.error('Warning: Failed to read cost cache, falling back to legacy', error);
       }
     }
 
-    // Also check legacy tracking files for any historical data
+    // FALLBACK: Check legacy tracking files for any historical data not in cache
     const sessionMap = loadSessionMap();
     const runtimeMetrics = loadRuntimeMetrics();
 
@@ -8438,4 +8444,21 @@ server.listen(PORT, '0.0.0.0', async () => {
   } catch (error: any) {
     console.error('Failed to auto-start Cloister:', error.message);
   }
+
+  // Auto-cleanup old agent directories on startup (PAN-85)
+  // Run in background, non-blocking, catch errors
+  cleanupOldAgents(undefined, false)
+    .then((result) => {
+      if (result.count > 0) {
+        console.log(`[cleanup] Deleted ${result.count} old agent directories: ${result.deleted.join(', ')}`);
+      } else {
+        console.log('[cleanup] No old agent directories to clean');
+      }
+      if (result.errors.length > 0) {
+        console.warn('[cleanup] Errors during cleanup:', result.errors);
+      }
+    })
+    .catch((error: any) => {
+      console.error('[cleanup] Failed to clean up old agents:', error.message);
+    });
 });
