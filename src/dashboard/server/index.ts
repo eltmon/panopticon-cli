@@ -7968,64 +7968,54 @@ app.get('/api/costs/summary', (_req, res) => {
   }
 });
 
-// GET /api/costs/by-issue - Costs grouped by issue (calculated from actual session files)
+// GET /api/costs/by-issue - Costs grouped by issue (PAN-85: migrated to cache)
 app.get('/api/costs/by-issue', async (_req, res) => {
   try {
     const issueMap: Record<string, { totalCost: number; tokenCount: number; sessionCount: number; model?: string; durationMinutes?: number }> = {};
 
-    // Read all agent state files and calculate costs from actual session data
-    // Include both regular agents (agent-*) and planning agents (planning-*)
-    const agentsDir = join(homedir(), '.panopticon', 'agents');
-    if (existsSync(agentsDir)) {
-      const agentDirs = readdirSync(agentsDir).filter(name => name.startsWith('agent-') || name.startsWith('planning-'));
+    // PRIMARY: Read from pre-computed cache (PAN-81 event-sourced tracking)
+    const cacheFile = join(homedir(), '.panopticon', 'costs', 'by-issue.json');
+    if (existsSync(cacheFile)) {
+      try {
+        const cacheContent = readFileSync(cacheFile, 'utf-8');
+        const cache = JSON.parse(cacheContent);
 
-      // Process agents in parallel batches to avoid blocking (ASYNC)
-      const BATCH_SIZE = 5;
-      for (let i = 0; i < agentDirs.length; i += BATCH_SIZE) {
-        const batch = agentDirs.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map(async (agentDir) => {
-            try {
-              const stateFile = join(agentsDir, agentDir, 'state.json');
-              if (!existsSync(stateFile)) return null;
+        // Map cache format to expected format
+        for (const [issueId, issueData] of Object.entries(cache.issues || {})) {
+          const data = issueData as any;
+          const key = issueId.toLowerCase();
 
-              const state = JSON.parse(readFileSync(stateFile, 'utf-8'));
-              if (!state.issueId || !state.workspace) return null;
+          // Calculate total token count (input + output + cache tokens)
+          const totalTokens =
+            (data.inputTokens || 0) +
+            (data.outputTokens || 0) +
+            (data.cacheReadTokens || 0) +
+            (data.cacheWriteTokens || 0);
 
-              const sessionData = await parseWorkspaceSessionUsageAsync(state.workspace);
-              return { issueId: state.issueId, sessionData };
-            } catch {
-              return null;
+          // Get primary model (model with highest cost)
+          let primaryModel: string | undefined;
+          if (data.models) {
+            const modelEntries = Object.entries(data.models) as [string, number][];
+            if (modelEntries.length > 0) {
+              modelEntries.sort((a, b) => b[1] - a[1]);
+              primaryModel = modelEntries[0][0];
             }
-          })
-        );
-
-        // Aggregate results
-        for (const result of results) {
-          if (!result) continue;
-          const key = result.issueId.toLowerCase();
-          const sessionData = result.sessionData;
-
-          if (!issueMap[key]) {
-            issueMap[key] = { totalCost: 0, tokenCount: 0, sessionCount: 0 };
           }
 
-          issueMap[key].totalCost += sessionData.cost;
-          issueMap[key].tokenCount += sessionData.tokenCount;
-          issueMap[key].sessionCount += 1;
-          issueMap[key].model = sessionData.model;
-
-          if (sessionData.startTime && sessionData.endTime) {
-            const start = new Date(sessionData.startTime).getTime();
-            const end = new Date(sessionData.endTime).getTime();
-            const minutes = (end - start) / (1000 * 60);
-            issueMap[key].durationMinutes = (issueMap[key].durationMinutes || 0) + minutes;
-          }
+          issueMap[key] = {
+            totalCost: data.totalCost || 0,
+            tokenCount: totalTokens,
+            sessionCount: data.eventCount || 0, // Use eventCount as proxy for sessionCount
+            model: primaryModel,
+            // durationMinutes not available in cache yet - could be added in future
+          };
         }
+      } catch (error) {
+        console.error('Warning: Failed to read cost cache, falling back to legacy', error);
       }
     }
 
-    // Also check legacy tracking files for any historical data
+    // FALLBACK: Check legacy tracking files for any historical data not in cache
     const sessionMap = loadSessionMap();
     const runtimeMetrics = loadRuntimeMetrics();
 
