@@ -36,6 +36,18 @@ async function validateApiKey(provider: Provider, apiKey: string): Promise<{ val
   return res.json();
 }
 
+async function fetchPresetModels(preset: ModelPreset): Promise<Record<WorkTypeId, ModelId>> {
+  const res = await fetch(`/api/settings/presets/${preset}`);
+  if (!res.ok) throw new Error('Failed to fetch preset models');
+  const data = await res.json();
+  // Extract just the model IDs from the response
+  const models: Record<string, string> = {};
+  for (const [workType, modelInfo] of Object.entries(data.models)) {
+    models[workType] = (modelInfo as any).model;
+  }
+  return models as Record<WorkTypeId, ModelId>;
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
 
@@ -47,6 +59,13 @@ export function SettingsPage() {
 
   // Form state
   const [formData, setFormData] = useState<SettingsConfig | null>(null);
+
+  // Fetch preset models based on current preset selection
+  const { data: presetModels } = useQuery({
+    queryKey: ['presetModels', formData?.models.preset || 'balanced'],
+    queryFn: () => fetchPresetModels(formData?.models.preset || 'balanced'),
+    enabled: !!formData,
+  });
 
   // Initialize form data when settings load
   useEffect(() => {
@@ -172,10 +191,6 @@ export function SettingsPage() {
     setFormData(settings || null);
   };
 
-  // Get preset models for comparison in overrides table
-  // TODO: This should come from the backend API or preset definitions
-  const presetModels: Partial<Record<WorkTypeId, ModelId>> = {};
-
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
@@ -204,7 +219,7 @@ export function SettingsPage() {
       {/* Work Type Overrides */}
       <WorkTypeOverrides
         overrides={formData.models.overrides}
-        presetModels={presetModels}
+        presetModels={presetModels || {}}
         onConfigureOverride={handleConfigureOverride}
         onRemoveOverride={handleRemoveOverride}
       />
