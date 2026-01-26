@@ -129,6 +129,7 @@ export async function doneCommand(id: string, options: DoneOptions = {}): Promis
     const state = getAgentState(agentId);
     if (state) {
       state.lastActivity = new Date().toISOString();
+      state.status = 'completed'; // PAN-85: Mark agent as completed for cleanup
       saveAgentState(state);
 
       // Update runtime state to idle
