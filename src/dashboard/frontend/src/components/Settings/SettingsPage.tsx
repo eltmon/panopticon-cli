@@ -5,6 +5,8 @@ import { SettingsConfig, Provider, ModelPreset, WorkTypeId, ModelId } from './ty
 import { PresetSelector } from './Preset/PresetSelector';
 import { ProviderPanel } from './Provider/ProviderPanel';
 import { WorkTypeOverrides } from './Override/WorkTypeOverrides';
+import { OverrideConfigModal } from './Override/OverrideConfigModal';
+import { AvailableModels } from './Override/ModelSelector';
 import { Button } from './Shared/Button';
 
 // API Functions
@@ -48,6 +50,12 @@ async function fetchPresetModels(preset: ModelPreset): Promise<Record<WorkTypeId
   return models as Record<WorkTypeId, ModelId>;
 }
 
+async function fetchAvailableModels(): Promise<AvailableModels> {
+  const res = await fetch('/api/settings/available-models');
+  if (!res.ok) throw new Error('Failed to fetch available models');
+  return res.json();
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
 
@@ -60,11 +68,21 @@ export function SettingsPage() {
   // Form state
   const [formData, setFormData] = useState<SettingsConfig | null>(null);
 
+  // Override modal state
+  const [overrideModalOpen, setOverrideModalOpen] = useState(false);
+  const [selectedWorkType, setSelectedWorkType] = useState<WorkTypeId | null>(null);
+
   // Fetch preset models based on current preset selection
   const { data: presetModels } = useQuery({
     queryKey: ['presetModels', formData?.models.preset || 'balanced'],
     queryFn: () => fetchPresetModels(formData?.models.preset || 'balanced'),
     enabled: !!formData,
+  });
+
+  // Fetch available models
+  const { data: availableModels } = useQuery({
+    queryKey: ['availableModels'],
+    queryFn: fetchAvailableModels,
   });
 
   // Initialize form data when settings load
@@ -166,8 +184,21 @@ export function SettingsPage() {
   };
 
   const handleConfigureOverride = (workType: WorkTypeId) => {
-    // TODO: Open modal to select model for this work type
-    console.log('Configure override for', workType);
+    setSelectedWorkType(workType);
+    setOverrideModalOpen(true);
+  };
+
+  const handleApplyOverride = (workType: WorkTypeId, model: ModelId) => {
+    setFormData({
+      ...formData!,
+      models: {
+        ...formData!.models,
+        overrides: {
+          ...formData!.models.overrides,
+          [workType]: model,
+        },
+      },
+    });
   };
 
   const handleRemoveOverride = (workType: WorkTypeId) => {
@@ -222,6 +253,17 @@ export function SettingsPage() {
         presetModels={presetModels || {}}
         onConfigureOverride={handleConfigureOverride}
         onRemoveOverride={handleRemoveOverride}
+      />
+
+      {/* Override Config Modal */}
+      <OverrideConfigModal
+        workType={selectedWorkType}
+        currentModel={selectedWorkType ? formData.models.overrides[selectedWorkType] : undefined}
+        presetModel={selectedWorkType && presetModels ? presetModels[selectedWorkType] : undefined}
+        availableModels={availableModels || { anthropic: [], openai: [], google: [], zai: [] }}
+        isOpen={overrideModalOpen}
+        onClose={() => setOverrideModalOpen(false)}
+        onApply={handleApplyOverride}
       />
 
       {/* Action Buttons */}
