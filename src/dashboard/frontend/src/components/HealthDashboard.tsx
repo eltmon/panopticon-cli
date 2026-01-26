@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AgentHealth } from '../types';
-import { Activity, AlertTriangle, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle, XCircle, Clock, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 async function fetchHealth(): Promise<AgentHealth[]> {
   const res = await fetch('/api/health/agents');
@@ -16,11 +17,60 @@ const STATUS_CONFIG: Record<AgentHealth['status'], { icon: typeof CheckCircle; c
 };
 
 export function HealthDashboard() {
+  const queryClient = useQueryClient();
   const { data: health, isLoading, error } = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
     refetchInterval: 5000,
   });
+
+  // Cleanup state (PAN-85)
+  const [showCleanupDialog, setShowCleanupDialog] = useState(false);
+  const [cleanupPreview, setCleanupPreview] = useState<string[]>([]);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
+
+  // Fetch cleanup preview (dry run)
+  const fetchCleanupPreview = async () => {
+    try {
+      const res = await fetch('/api/agents/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: true }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch cleanup preview');
+      const result = await res.json();
+      setCleanupPreview(result.deleted || []);
+      setShowCleanupDialog(true);
+    } catch (err) {
+      console.error('Error fetching cleanup preview:', err);
+      alert('Failed to fetch cleanup preview');
+    }
+  };
+
+  // Execute cleanup
+  const executeCleanup = async () => {
+    setIsCleaningUp(true);
+    try {
+      const res = await fetch('/api/agents/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false }),
+      });
+      if (!res.ok) throw new Error('Failed to clean up agents');
+      const result = await res.json();
+
+      // Refresh health data after cleanup
+      await queryClient.invalidateQueries({ queryKey: ['health'] });
+
+      setShowCleanupDialog(false);
+      alert(`Successfully cleaned up ${result.count} agent directories`);
+    } catch (err) {
+      console.error('Error cleaning up agents:', err);
+      alert('Failed to clean up agents: ' + (err as Error).message);
+    } finally {
+      setIsCleaningUp(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -82,6 +132,64 @@ export function HealthDashboard() {
           );
         })}
       </div>
+
+      {/* Cleanup button (PAN-85) */}
+      <div className="flex justify-end">
+        <button
+          onClick={fetchCleanupPreview}
+          className="flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
+        >
+          <Trash2 className="w-4 h-4" />
+          Clean Old Agents (7+ days)
+        </button>
+      </div>
+
+      {/* Cleanup confirmation dialog (PAN-85) */}
+      {showCleanupDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-2xl w-full mx-4 border border-gray-700">
+            <h3 className="text-xl font-bold text-white mb-4">Confirm Agent Cleanup</h3>
+
+            {cleanupPreview.length === 0 ? (
+              <p className="text-gray-400 mb-6">No old agents to clean up.</p>
+            ) : (
+              <>
+                <p className="text-gray-400 mb-4">
+                  The following {cleanupPreview.length} agent directories will be deleted:
+                </p>
+                <div className="bg-gray-900 rounded p-4 mb-6 max-h-64 overflow-y-auto">
+                  <ul className="text-sm text-gray-300 space-y-1">
+                    {cleanupPreview.map((agent) => (
+                      <li key={agent} className="font-mono">
+                        {agent}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            )}
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowCleanupDialog(false)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                disabled={isCleaningUp}
+              >
+                Cancel
+              </button>
+              {cleanupPreview.length > 0 && (
+                <button
+                  onClick={executeCleanup}
+                  disabled={isCleaningUp}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
+                >
+                  {isCleaningUp ? 'Cleaning...' : `Delete ${cleanupPreview.length} Agents`}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Agent cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
