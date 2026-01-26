@@ -21,6 +21,7 @@ import { readHandoffEvents, readIssueHandoffEvents, readAgentHandoffEvents, getH
 import { readSpecialistHandoffs, getSpecialistHandoffStats } from '../../lib/cloister/specialist-handoff-logger.js';
 import { checkAllTriggers } from '../../lib/cloister/triggers.js';
 import { getAgentState, getAgentRuntimeState, saveAgentRuntimeState, getActivity, appendActivity, saveSessionId, getSessionId, resumeAgent } from '../../lib/agents.js';
+import { cleanupOldAgents } from '../../lib/cleanup.js';
 import { getAgentHealth } from '../../lib/cloister/health.js';
 import { getRuntimeForAgent } from '../../lib/runtimes/index.js';
 import { resolveProjectFromIssue, listProjects, hasProjects, ProjectConfig, findProjectByTeam, extractTeamPrefix } from '../../lib/projects.js';
@@ -5941,6 +5942,21 @@ app.post('/api/agents', async (req, res) => {
   } catch (error: any) {
     console.error('Error starting agent:', error);
     res.status(500).json({ error: 'Failed to start agent: ' + error.message });
+  }
+});
+
+// POST /api/agents/cleanup - Clean up old agent directories (PAN-85)
+app.post('/api/agents/cleanup', async (req, res) => {
+  try {
+    const { dryRun = false, ageThresholdDays } = req.body;
+
+    // Call cleanup function from cleanup.ts
+    const result = await cleanupOldAgents(ageThresholdDays, dryRun);
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error cleaning up agents:', error);
+    res.status(500).json({ error: 'Failed to clean up agents: ' + error.message });
   }
 });
 
