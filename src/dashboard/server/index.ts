@@ -8393,4 +8393,21 @@ server.listen(PORT, '0.0.0.0', async () => {
   } catch (error: any) {
     console.error('Failed to auto-start Cloister:', error.message);
   }
+
+  // Auto-cleanup old agent directories on startup (PAN-85)
+  // Run in background, non-blocking, catch errors
+  cleanupOldAgents(undefined, false)
+    .then((result) => {
+      if (result.count > 0) {
+        console.log(`[cleanup] Deleted ${result.count} old agent directories: ${result.deleted.join(', ')}`);
+      } else {
+        console.log('[cleanup] No old agent directories to clean');
+      }
+      if (result.errors.length > 0) {
+        console.warn('[cleanup] Errors during cleanup:', result.errors);
+      }
+    })
+    .catch((error: any) => {
+      console.error('[cleanup] Failed to clean up old agents:', error.message);
+    });
 });
