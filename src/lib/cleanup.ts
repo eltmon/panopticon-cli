@@ -66,29 +66,27 @@ function matchesCleanablePattern(dirName: string): boolean {
 
 /**
  * Get the age of an agent directory in days
- * Uses the more recent of: directory mtime or state.json lastActivity
+ * Uses state.json timestamps (lastActivity or startedAt), falling back to directory mtime
  */
-function getAgentAgeDays(dirPath: string, dirName: string): number {
-  let mostRecentTimestamp = 0;
+function getAgentAgeDays(
+  dirPath: string,
+  state: AgentState | null
+): number {
+  let mostRecentTimestamp: number | null = null;
 
   try {
-    // Get directory mtime
-    const stats = statSync(dirPath);
-    mostRecentTimestamp = stats.mtimeMs;
-
-    // Try to read state.json for lastActivity
-    const state = getAgentState(dirName);
+    // Use provided state or try to read state.json
     if (state?.lastActivity) {
-      const lastActivityMs = new Date(state.lastActivity).getTime();
-      if (lastActivityMs > mostRecentTimestamp) {
-        mostRecentTimestamp = lastActivityMs;
-      }
+      mostRecentTimestamp = new Date(state.lastActivity).getTime();
     } else if (state?.startedAt) {
       // Fallback to startedAt if no lastActivity
-      const startedAtMs = new Date(state.startedAt).getTime();
-      if (startedAtMs > mostRecentTimestamp) {
-        mostRecentTimestamp = startedAtMs;
-      }
+      mostRecentTimestamp = new Date(state.startedAt).getTime();
+    }
+
+    // If no state timestamps, fall back to directory mtime
+    if (mostRecentTimestamp === null) {
+      const stats = statSync(dirPath);
+      mostRecentTimestamp = stats.mtimeMs;
     }
   } catch (error) {
     // If we can't read stats or state, use current time (age = 0)
@@ -120,7 +118,7 @@ export function shouldCleanAgent(
 
   // Check age
   const dirPath = join(AGENTS_DIR, dirName);
-  const ageDays = getAgentAgeDays(dirPath, dirName);
+  const ageDays = getAgentAgeDays(dirPath, state);
 
   return ageDays >= ageThresholdDays;
 }
