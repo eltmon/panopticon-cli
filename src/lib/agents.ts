@@ -68,7 +68,7 @@ export interface AgentState {
   workspace: string;
   runtime: string;
   model: string;
-  status: 'starting' | 'running' | 'stopped' | 'error';
+  status: 'starting' | 'running' | 'stopped' | 'error' | 'completed';
   startedAt: string;
   lastActivity?: string;
   branch?: string; // Git branch name for this agent
