@@ -8,8 +8,10 @@ import { createSession, killSession, sendKeys, sessionExists, getAgentSessions }
 import { initHook, checkHook, generateFixedPointPrompt } from './hooks.js';
 import { startWork, completeWork, getAgentCV } from './cv.js';
 import type { ComplexityLevel } from './cloister/complexity.js';
-import { loadSettings, type ModelId } from './settings.js';
+import { loadSettings, type ModelId, type AnthropicModel } from './settings.js';
 import { getModelId, WorkTypeId } from './work-type-router.js';
+import { getCliForModel } from './ccr.js';
+import { getFallbackModel } from './model-fallback.js';
 
 const execAsync = promisify(exec);
 
@@ -338,13 +340,26 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentState> {
   // Determine model based on configuration
   const selectedModel = determineModel(options);
 
+  // Determine which CLI to use (claude vs ccr) and handle fallback (PAN-121)
+  const { cli, reason } = await getCliForModel(selectedModel);
+  let effectiveModel: ModelId = selectedModel;
+
+  // If CCR is missing for non-Anthropic model, fallback to Anthropic model
+  if (reason === 'ccr-missing-fallback') {
+    effectiveModel = getFallbackModel(selectedModel);
+    console.warn(
+      `[PAN-121] CCR not installed but non-Anthropic model '${selectedModel}' requested. ` +
+      `Falling back to '${effectiveModel}'. Install ccr (claude-code-router) to use non-Anthropic models.`
+    );
+  }
+
   // Create state
   const state: AgentState = {
     id: agentId,
     issueId: options.issueId,
     workspace: options.workspace,
     runtime: options.runtime || 'claude',
-    model: selectedModel,
+    model: effectiveModel,
     status: 'starting',
     startedAt: new Date().toISOString(),
     // Initialize Phase 4 fields (legacy)
@@ -385,7 +400,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentState> {
   // Clear ready signal before spawning (clean slate for PAN-87 fix)
   clearReadySignal(agentId);
 
-  // Create tmux session and start claude
+  // Create tmux session and start claude or ccr (PAN-121)
   // For prompts with special shell characters, use a launcher script to safely pass the prompt
   // The script reads the file into a variable, which bash then safely expands
   let claudeCmd: string;
@@ -393,12 +408,12 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentState> {
     const launcherScript = join(getAgentDir(agentId), 'launcher.sh');
     const launcherContent = `#!/bin/bash
 prompt=$(cat "${promptFile}")
-exec claude --dangerously-skip-permissions --model ${state.model} "\$prompt"
+exec ${cli} --dangerously-skip-permissions --model ${state.model} "\$prompt"
 `;
     writeFileSync(launcherScript, launcherContent, { mode: 0o755 });
     claudeCmd = `bash "${launcherScript}"`;
   } else {
-    claudeCmd = `claude --dangerously-skip-permissions --model ${state.model}`;
+    claudeCmd = `${cli} --dangerously-skip-permissions --model ${state.model}`;
   }
 
   createSession(agentId, options.workspace, claudeCmd, {

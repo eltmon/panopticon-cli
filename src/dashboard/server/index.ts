@@ -16,6 +16,7 @@ const execAsync = promisify(exec);
 import { loadCloisterConfig, saveCloisterConfig, shouldAutoStart } from '../../lib/cloister/config.js';
 import { loadSettings, saveSettings, validateSettings, getAvailableModels } from '../../lib/settings.js';
 import { loadSettingsApi, saveSettingsApi, validateSettingsApi, getAvailableModelsApi } from '../../lib/settings-api.js';
+import { getPresetModels, isValidPreset, type PresetName } from '../../lib/model-presets.js';
 import { generateRouterConfig, writeRouterConfig } from '../../lib/router-config.js';
 import { spawnMergeAgentForBranches } from '../../lib/cloister/merge-agent.js';
 import { checkAgentHealthAsync, determineHealthStatusAsync } from '../lib/health-filtering.js';
@@ -2226,6 +2227,25 @@ app.get('/api/settings/available-models', (_req, res) => {
   } catch (error: any) {
     console.error('Error loading available models:', error);
     res.status(500).json({ error: 'Failed to load available models: ' + error.message });
+  }
+});
+
+// Get preset model configuration (PAN-121)
+app.get('/api/settings/presets/:preset', (_req, res) => {
+  const presetName = _req.params.preset;
+
+  // Validate preset name
+  if (!isValidPreset(presetName)) {
+    res.status(400).json({ error: `Invalid preset name: ${presetName}` });
+    return;
+  }
+
+  try {
+    const presetModels = getPresetModels(presetName as PresetName);
+    res.json(presetModels);
+  } catch (error: any) {
+    console.error('Error loading preset models:', error);
+    res.status(500).json({ error: 'Failed to get preset models: ' + error.message });
   }
 });
 

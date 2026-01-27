@@ -7,7 +7,8 @@
  */
 
 import { WorkTypeId } from './work-types.js';
-import { ModelId } from './settings.js';
+import { ModelId, AvailableModelsResponse } from './settings.js';
+import { getModelProvider } from './ccr.js';
 
 /**
  * Preset name
@@ -248,4 +249,129 @@ export function getPresetsMetadata(): PresetMetadata[] {
       costLevel: preset.costLevel,
     };
   });
+}
+
+/**
+ * Model information with provider and cost tier for UI display
+ */
+export interface PresetModelInfo {
+  model: string;
+  provider: 'anthropic' | 'openai' | 'google' | 'zai';
+  costTier: 1 | 2 | 3 | 4 | 5;
+}
+
+/**
+ * Full preset response with all model assignments for API
+ */
+export interface PresetModelsResponse {
+  preset: PresetName;
+  displayName: string;
+  description: string;
+  costLevel: number;
+  models: Record<WorkTypeId, PresetModelInfo>;
+}
+
+/**
+ * Model provider types
+ */
+export type ModelProvider = 'anthropic' | 'openai' | 'google' | 'zai';
+
+/**
+ * Model lists by provider
+ */
+const ANTHROPIC_MODELS = ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'];
+const OPENAI_MODELS = ['gpt-5.2-codex', 'gpt-4o', 'gpt-4o-mini', 'o3-deep-research'];
+const GOOGLE_MODELS = ['gemini-3-pro-preview', 'gemini-3-flash-preview'];
+const ZAI_MODELS = ['glm-4-plus'];
+
+/**
+ * Get available models based on enabled providers
+ * @param enabledProviders - Set of providers that have API keys configured
+ * @returns Available models grouped by provider
+ */
+export function getAvailableModels(enabledProviders: Set<ModelProvider>): AvailableModelsResponse {
+  const available: AvailableModelsResponse = {
+    anthropic: [],
+    openai: [],
+    google: [],
+    zai: [],
+  };
+
+  // Always include Anthropic models (no API key needed)
+  available.anthropic = ANTHROPIC_MODELS;
+
+  // Only include other providers if enabled
+  if (enabledProviders.has('openai')) {
+    available.openai = OPENAI_MODELS;
+  }
+  if (enabledProviders.has('google')) {
+    available.google = GOOGLE_MODELS;
+  }
+  if (enabledProviders.has('zai')) {
+    available.zai = ZAI_MODELS;
+  }
+
+  return available;
+}
+
+/**
+ * Get cost tier for a model (1=cheapest, 5=most expensive)
+ * Based on relative pricing across providers
+ */
+function getModelCostTier(model: string): 1 | 2 | 3 | 4 | 5 {
+  const lowerModel = model.toLowerCase();
+
+  // Tier 5: Most expensive (Opus, GPT-5.2, O3)
+  if (lowerModel.includes('opus') || lowerModel.includes('gpt-5') || lowerModel.includes('o3-')) {
+    return 5;
+  }
+
+  // Tier 4: Premium (Sonnet, GPT-4o, Gemini Pro)
+  if (lowerModel.includes('sonnet') || lowerModel.includes('gpt-4o') || lowerModel.includes('gemini-3-pro')) {
+    return 4;
+  }
+
+  // Tier 3: Mid-tier (GPT-4o-mini, GLM-4)
+  if (lowerModel.includes('gpt-4o-mini') || lowerModel.includes('glm-4')) {
+    return 3;
+  }
+
+  // Tier 2: Budget (Haiku-like models)
+  if (lowerModel.includes('haiku')) {
+    return 2;
+  }
+
+  // Tier 1: Cheapest (Flash models)
+  if (lowerModel.includes('flash')) {
+    return 1;
+  }
+
+  // Default to mid-tier for unknown models
+  return 3;
+}
+
+/**
+ * Get full preset configuration with enriched model information
+ * @param presetName - Name of the preset to retrieve
+ * @returns Preset configuration with provider and cost tier for each model
+ */
+export function getPresetModels(presetName: PresetName): PresetModelsResponse {
+  const preset = getPreset(presetName);
+  const models: Record<WorkTypeId, PresetModelInfo> = {} as Record<WorkTypeId, PresetModelInfo>;
+
+  for (const [workType, model] of Object.entries(preset.models)) {
+    models[workType as WorkTypeId] = {
+      model,
+      provider: getModelProvider(model),
+      costTier: getModelCostTier(model),
+    };
+  }
+
+  return {
+    preset: presetName,
+    displayName: preset.displayName,
+    description: preset.description,
+    costLevel: preset.costLevel,
+    models,
+  };
 }

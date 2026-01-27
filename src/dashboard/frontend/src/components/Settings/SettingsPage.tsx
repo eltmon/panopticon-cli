@@ -5,6 +5,9 @@ import { SettingsConfig, Provider, ModelPreset, WorkTypeId, ModelId } from './ty
 import { PresetSelector } from './Preset/PresetSelector';
 import { ProviderPanel } from './Provider/ProviderPanel';
 import { WorkTypeOverrides } from './Override/WorkTypeOverrides';
+import { OverrideConfigModal } from './Override/OverrideConfigModal';
+import { PresetPreviewModal } from './Preset/PresetPreviewModal';
+import { AvailableModels } from './Override/ModelSelector';
 import { Button } from './Shared/Button';
 
 // API Functions
@@ -36,6 +39,24 @@ async function validateApiKey(provider: Provider, apiKey: string): Promise<{ val
   return res.json();
 }
 
+async function fetchPresetModels(preset: ModelPreset): Promise<Record<WorkTypeId, ModelId>> {
+  const res = await fetch(`/api/settings/presets/${preset}`);
+  if (!res.ok) throw new Error('Failed to fetch preset models');
+  const data = await res.json();
+  // Extract just the model IDs from the response
+  const models: Record<string, string> = {};
+  for (const [workType, modelInfo] of Object.entries(data.models)) {
+    models[workType] = (modelInfo as any).model;
+  }
+  return models as Record<WorkTypeId, ModelId>;
+}
+
+async function fetchAvailableModels(): Promise<AvailableModels> {
+  const res = await fetch('/api/settings/available-models');
+  if (!res.ok) throw new Error('Failed to fetch available models');
+  return res.json();
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
 
@@ -47,6 +68,27 @@ export function SettingsPage() {
 
   // Form state
   const [formData, setFormData] = useState<SettingsConfig | null>(null);
+
+  // Override modal state
+  const [overrideModalOpen, setOverrideModalOpen] = useState(false);
+  const [selectedWorkType, setSelectedWorkType] = useState<WorkTypeId | null>(null);
+
+  // Preset preview modal state
+  const [presetPreviewOpen, setPresetPreviewOpen] = useState(false);
+  const [previewPreset, setPreviewPreset] = useState<ModelPreset | null>(null);
+
+  // Fetch preset models based on current preset selection
+  const { data: presetModels } = useQuery({
+    queryKey: ['presetModels', formData?.models.preset || 'balanced'],
+    queryFn: () => fetchPresetModels(formData?.models.preset || 'balanced'),
+    enabled: !!formData,
+  });
+
+  // Fetch available models
+  const { data: availableModels } = useQuery({
+    queryKey: ['availableModels'],
+    queryFn: fetchAvailableModels,
+  });
 
   // Initialize form data when settings load
   useEffect(() => {
@@ -99,6 +141,17 @@ export function SettingsPage() {
     });
   };
 
+  const handlePresetPreview = (preset: ModelPreset) => {
+    setPreviewPreset(preset);
+    setPresetPreviewOpen(true);
+  };
+
+  const handleApplyPreset = () => {
+    if (previewPreset) {
+      handlePresetChange(previewPreset);
+    }
+  };
+
   const handleProviderToggle = (provider: Provider) => {
     if (provider === 'anthropic') return; // Anthropic is always enabled
 
@@ -147,8 +200,21 @@ export function SettingsPage() {
   };
 
   const handleConfigureOverride = (workType: WorkTypeId) => {
-    // TODO: Open modal to select model for this work type
-    console.log('Configure override for', workType);
+    setSelectedWorkType(workType);
+    setOverrideModalOpen(true);
+  };
+
+  const handleApplyOverride = (workType: WorkTypeId, model: ModelId) => {
+    setFormData({
+      ...formData!,
+      models: {
+        ...formData!.models,
+        overrides: {
+          ...formData!.models.overrides,
+          [workType]: model,
+        },
+      },
+    });
   };
 
   const handleRemoveOverride = (workType: WorkTypeId) => {
@@ -172,10 +238,6 @@ export function SettingsPage() {
     setFormData(settings || null);
   };
 
-  // Get preset models for comparison in overrides table
-  // TODO: This should come from the backend API or preset definitions
-  const presetModels: Partial<Record<WorkTypeId, ModelId>> = {};
-
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
@@ -188,7 +250,7 @@ export function SettingsPage() {
       </div>
 
       {/* Preset Selector */}
-      <PresetSelector selected={formData.models.preset} onChange={handlePresetChange} />
+      <PresetSelector selected={formData.models.preset} onChange={handlePresetChange} onPreview={handlePresetPreview} />
 
       {/* Provider Panel */}
       <ProviderPanel
@@ -204,9 +266,29 @@ export function SettingsPage() {
       {/* Work Type Overrides */}
       <WorkTypeOverrides
         overrides={formData.models.overrides}
-        presetModels={presetModels}
+        presetModels={presetModels || {}}
         onConfigureOverride={handleConfigureOverride}
         onRemoveOverride={handleRemoveOverride}
+      />
+
+      {/* Preset Preview Modal */}
+      <PresetPreviewModal
+        preset={previewPreset || 'balanced'}
+        isOpen={presetPreviewOpen}
+        onClose={() => setPresetPreviewOpen(false)}
+        onApply={handleApplyPreset}
+        currentOverrides={formData.models.overrides}
+      />
+
+      {/* Override Config Modal */}
+      <OverrideConfigModal
+        workType={selectedWorkType}
+        currentModel={selectedWorkType ? formData.models.overrides[selectedWorkType] : undefined}
+        presetModel={selectedWorkType && presetModels ? presetModels[selectedWorkType] : undefined}
+        availableModels={availableModels || { anthropic: [], openai: [], google: [], zai: [] }}
+        isOpen={overrideModalOpen}
+        onClose={() => setOverrideModalOpen(false)}
+        onApply={handleApplyOverride}
       />
 
       {/* Action Buttons */}

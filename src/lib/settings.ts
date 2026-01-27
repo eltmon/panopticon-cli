@@ -177,6 +177,16 @@ export function getDefaultSettings(): SettingsConfig {
 }
 
 /**
+ * Response type for available models API endpoint
+ */
+export interface AvailableModelsResponse {
+  anthropic: string[];
+  openai: string[];
+  google: string[];
+  zai: string[];
+}
+
+/**
  * Get available models for a provider based on configured API keys
  * Returns empty array if provider API key is not configured
  */
