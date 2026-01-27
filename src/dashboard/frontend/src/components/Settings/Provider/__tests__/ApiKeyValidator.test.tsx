@@ -22,14 +22,14 @@ describe('ApiKeyValidator', () => {
     it('should render input field with provided value', () => {
       render(<ApiKeyValidator provider="openai" value="sk-test-key" onChange={mockOnChange} />);
 
-      const input = screen.getByRole('textbox') as HTMLInputElement;
+      const input = screen.getByDisplayValue('sk-test-key') as HTMLInputElement;
       expect(input.value).toBe('sk-test-key');
     });
 
     it('should render as password type by default', () => {
       render(<ApiKeyValidator provider="openai" value="sk-test-key" onChange={mockOnChange} />);
 
-      const input = screen.getByRole('textbox') as HTMLInputElement;
+      const input = screen.getByDisplayValue('sk-test-key') as HTMLInputElement;
       expect(input.type).toBe('password');
     });
 
@@ -43,7 +43,7 @@ describe('ApiKeyValidator', () => {
     it('should be disabled when disabled prop is true', () => {
       render(<ApiKeyValidator provider="anthropic" value="sk-ant-test" onChange={mockOnChange} disabled={true} />);
 
-      const input = screen.getByRole('textbox') as HTMLInputElement;
+      const input = screen.getByDisplayValue('sk-ant-test') as HTMLInputElement;
       expect(input).toBeDisabled();
     });
   });
@@ -52,7 +52,7 @@ describe('ApiKeyValidator', () => {
     it('should toggle between password and text type when eye button clicked', async () => {
       render(<ApiKeyValidator provider="openai" value="sk-test-key" onChange={mockOnChange} />);
 
-      const input = screen.getByRole('textbox') as HTMLInputElement;
+      const input = screen.getByDisplayValue('sk-test-key') as HTMLInputElement;
       const toggleButton = screen.getByRole('button');
 
       // Initially password
@@ -72,7 +72,7 @@ describe('ApiKeyValidator', () => {
     it('should call onChange when input value changes', () => {
       render(<ApiKeyValidator provider="openai" value="" onChange={mockOnChange} />);
 
-      const input = screen.getByRole('textbox');
+      const input = screen.getByPlaceholderText(/sk-/i);
       fireEvent.change(input, { target: { value: 'sk-new-key' } });
 
       expect(mockOnChange).toHaveBeenCalledWith('sk-new-key');
